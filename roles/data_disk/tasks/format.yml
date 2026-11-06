@@ -1,0 +1,53 @@
+---
+- name: Look up the data device
+  ansible.builtin.stat:
+    path: "{{ data_disk_device }}"
+  register: data_disk_stat
+
+- name: Require the data device to exist and be a block device
+  ansible.builtin.assert:
+    that:
+      - data_disk_stat.stat.exists
+      - data_disk_stat.stat.isblk | default(false) or not data_disk_require_block
+    fail_msg: >-
+      {{ data_disk_device }} is missing or is not a block device. On the KVM
+      host run host-prep/attach-data-disk.sh, then check lsblk in the VM.
+
+- name: Refuse a device that is in use for something else
+  ansible.builtin.assert:
+    that: >-
+      ansible_facts.mounts
+      | selectattr('device', 'match', data_disk_device)
+      | rejectattr('mount', 'equalto', data_disk_mount)
+      | list | length == 0
+    fail_msg: >-
+      {{ data_disk_device }} (or a partition of it) is mounted somewhere other
+      than {{ data_disk_mount }}. Wrong device? Check lsblk. Nothing was changed.
+
+- name: Install the filesystem tools
+  ansible.builtin.dnf:
+    name: "{{ 'xfsprogs' if data_disk_fstype == 'xfs' else 'e2fsprogs' }}"
+    state: present
+  when: data_disk_require_block
+
+# Never reformats: it only creates a filesystem on a device that has none, and
+# fails (without force) if the device holds another filesystem or a partition table.
+- name: Create the filesystem
+  community.general.filesystem:
+    dev: "{{ data_disk_device }}"
+    fstype: "{{ data_disk_fstype }}"
+    opts: "-L {{ data_disk_label }}"
+
+- name: Read the filesystem UUID
+  ansible.builtin.command: blkid -s UUID -o value {{ data_disk_device }}
+  register: data_disk_uuid
+  changed_when: false
+
+- name: Mount it and keep it in /etc/fstab
+  ansible.posix.mount:
+    path: "{{ data_disk_mount }}"
+    src: "UUID={{ data_disk_uuid.stdout }}"
+    fstype: "{{ data_disk_fstype }}"
+    opts: defaults
+    state: mounted
+  when: data_disk_require_block

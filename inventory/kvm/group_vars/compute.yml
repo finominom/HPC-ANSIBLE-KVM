@@ -1,0 +1,17 @@
+---
+# Compute VMs: one NIC on the libvirt network "hpc", model e1000.
+# (Legacy BIOS PXE needs a NIC with a PXE boot ROM in QEMU: e1000 or virtio.
+# e1000 matches the runbook's "Intel PRO/1000".)
+# The interface name is for the Kickstart network line. Nodes use the same
+# machine type as the master, so the first NIC should be enp1s0. After c01 is
+# installed, confirm with `ip -br link`; if it differs, fix it here and re-add
+# the Cobbler system record.
+node_if_cluster: enp1s0
+
+# Used by host-prep/compute-vms.yml (run on the KVM host)
+node_vm_libvirt_network: hpc
+node_vm_nic_model: e1000
+node_vm_memory_mb: 3072      # the network installer needs more than 2 GB
+node_vm_vcpus: 2
+node_vm_disk_gb: 20
+node_vm_image_dir: /home/libvirt/images

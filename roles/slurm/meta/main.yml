@@ -1,0 +1,14 @@
+---
+galaxy_info:
+  role_name: slurm
+  author: UNIBEN HPC team
+  description: Munge, Slurm controller (slurmctld + slurmdbd/MariaDB) and compute (slurmd) for AlmaLinux 9
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: EL
+      versions: ["9"]
+
+# Run the service_accounts role before this one, so the munge and slurm
+# users have the same UID/GID on every node.
+dependencies: []

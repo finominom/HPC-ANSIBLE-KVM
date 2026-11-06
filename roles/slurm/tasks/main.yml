@@ -1,0 +1,31 @@
+---
+- name: Preflight checks
+  ansible.builtin.import_tasks: preflight.yml
+  tags: [slurm, slurm_preflight]
+
+- name: Packages
+  ansible.builtin.import_tasks: packages.yml
+  tags: [slurm, slurm_packages]
+
+- name: Munge
+  ansible.builtin.import_tasks: munge.yml
+  tags: [slurm, slurm_munge]
+
+- name: Shared configuration (slurm.conf, cgroup.conf, directories)
+  ansible.builtin.import_tasks: config.yml
+  tags: [slurm, slurm_config]
+
+- name: Firewall
+  ansible.builtin.import_tasks: firewall.yml
+  when: slurm_manage_firewall | bool
+  tags: [slurm, slurm_firewall]
+
+- name: Controller (slurmdbd, MariaDB, slurmctld)
+  ansible.builtin.import_tasks: controller.yml
+  when: slurm_is_controller | bool
+  tags: [slurm, slurm_controller]
+
+- name: Compute (slurmd)
+  ansible.builtin.import_tasks: compute.yml
+  when: slurm_is_compute | bool
+  tags: [slurm, slurm_compute]

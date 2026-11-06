@@ -1,0 +1,30 @@
+#!/bin/bash
+# hpc-provision-dispatch -- started by hpc-provision.path whenever Cobbler's install
+# triggers drop an event into $QUEUE_DIR. Turns events into states and starts the
+# per-node configuration worker. Safe to run any number of times.
+set -uo pipefail
+source /usr/local/lib/hpc-provision/lib.sh
+shopt -s nullglob
+
+for f in "$QUEUE_DIR"/*; do
+    name=$(basename "$f")              # <node>.<mode>.<nanoseconds>
+    node=${name%%.*}
+    rest=${name#*.}
+    mode=${rest%%.*}
+    rm -f "$f"
+    [[ "$node" =~ $NODES_REGEX ]] || continue
+
+    case $mode in
+        pre)
+            state_set "$node" INSTALLING "installer started (kickstart %pre)"
+            ;;
+        post)
+            # ignore a duplicate post event for a job that already moved on
+            case $(state_get "$node") in
+                NETBOOT_DISABLED|CONFIGURING|VALIDATING|READY) continue ;;
+            esac
+            state_set "$node" INSTALLED "kickstart finished, netboot-off requested"
+            systemctl start --no-block "hpc-configure@${node}.service"
+            ;;
+    esac
+done

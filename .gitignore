@@ -1,0 +1,4 @@
+provisioning/logs/
+provisioning/state/
+*.bak*
+*.retry

@@ -1,0 +1,14 @@
+---
+nfs_export_home: /data/home
+nfs_export_opt: /data/opt
+
+# On the real master /data must be its own filesystem, not the root disk.
+nfs_require_separate_data_fs: false
+
+# On the master, /home/USER is an autofs bind of /data/home/USER, so paths
+# are the same as on the compute nodes.
+nfs_master_autofs_home: true
+
+# Home folders created under /data/home (users with a home in /home)
+nfs_home_dirs:
+  - { name: install, owner: install, group: install }

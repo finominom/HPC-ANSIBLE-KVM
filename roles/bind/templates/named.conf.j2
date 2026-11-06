@@ -1,0 +1,63 @@
+// {{ ansible_managed }}
+// Cluster DNS for .{{ cluster_domain }} and .{{ mgmt_domain }}
+
+options {
+        listen-on port 53 { 127.0.0.1; {{ master_cluster_ip }}; {{ master_mgmt_ip }}; };
+        listen-on-v6 port 53 { ::1; };
+        directory       "/var/named";
+        dump-file       "/var/named/data/cache_dump.db";
+        statistics-file "/var/named/data/named_stats.txt";
+        memstatistics-file "/var/named/data/named_mem_stats.txt";
+        secroots-file   "/var/named/data/named.secroots";
+        recursing-file  "/var/named/data/named.recursing";
+
+        allow-query     { localhost; {{ cluster_net }}; {{ mgmt_net }}; };
+        recursion yes;
+        allow-recursion { localhost; {{ cluster_net }}; {{ mgmt_net }}; };
+{% if bind_forwarders | length > 0 %}
+        forwarders      { {% for f in bind_forwarders %}{{ f }}; {% endfor %}};
+        forward only;
+{% endif %}
+
+        dnssec-validation {{ bind_dnssec_validation }};
+
+        managed-keys-directory "/var/named/dynamic";
+        geoip-directory "/usr/share/GeoIP";
+        pid-file "/run/named/named.pid";
+        session-keyfile "/run/named/session.key";
+
+        include "/etc/crypto-policies/back-ends/bind.config";
+};
+
+logging {
+        channel default_debug {
+                file "data/named.run";
+                severity dynamic;
+        };
+};
+
+zone "." IN {
+        type hint;
+        file "named.ca";
+};
+
+include "/etc/named.rfc1912.zones";
+include "/etc/named.root.key";
+
+// ---- Cluster forward zones ----
+{% for z in bind_forward_zones %}
+zone "{{ z.zone }}" IN {
+        type master;
+        file "{{ z.zone }}.zone";
+        allow-update { none; };
+};
+{% endfor %}
+
+// ---- Cluster reverse zones ----
+{% for net in bind_reverse_nets %}
+zone "{{ net.split('.') | reverse | join('.') }}.in-addr.arpa" IN {
+        type master;
+        file "{{ net }}.rev";
+        allow-update { none; };
+};
+{% endfor %}

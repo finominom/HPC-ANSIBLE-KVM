@@ -1,0 +1,12 @@
+[Unit]
+Description=Virtual BMC daemon
+After=libvirtd.service network-online.target
+
+[Service]
+# check the path with: command -v vbmcd
+ExecStartPre=/usr/bin/rm -f /root/.vbmc/master.pid
+ExecStart=/usr/local/bin/vbmcd --foreground
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

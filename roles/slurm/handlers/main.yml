@@ -1,0 +1,30 @@
+---
+# Handlers run in this order: munge first, then the database, then Slurm.
+- name: Restart munge
+  ansible.builtin.systemd:
+    name: munge
+    state: restarted
+
+- name: Restart mariadb
+  ansible.builtin.systemd:
+    name: mariadb
+    state: restarted
+  when: slurm_is_controller | bool and slurm_enable_accounting | bool
+
+- name: Restart slurmdbd
+  ansible.builtin.systemd:
+    name: slurmdbd
+    state: restarted
+  when: slurm_is_controller | bool and slurm_enable_accounting | bool
+
+- name: Restart slurmctld
+  ansible.builtin.systemd:
+    name: slurmctld
+    state: restarted
+  when: slurm_is_controller | bool
+
+- name: Restart slurmd
+  ansible.builtin.systemd:
+    name: slurmd
+    state: restarted
+  when: slurm_is_compute | bool

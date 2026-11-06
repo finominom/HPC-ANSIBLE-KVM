@@ -1,0 +1,49 @@
+# {{ ansible_managed }}
+# Minimal AlmaLinux 9 compute node. Rendered by Ansible when deployed, then
+# by Cobbler for each node. (No dollar signs in comments: Cobbler would try
+# to substitute them.)
+# WARNING: wipes every disk on the node it installs.
+text
+lang en_US.UTF-8
+keyboard us
+timezone {{ cluster_timezone }} --utc
+url --url=$tree
+$SNIPPET('network_config')
+rootpw --iscrypted $default_password_crypted
+selinux --enforcing
+firewall --enabled --service=ssh
+services --enabled=chronyd,sshd
+bootloader --location=mbr
+zerombr
+clearpart --all --initlabel
+autopart --type=lvm
+skipx
+firstboot --disable
+reboot
+
+%pre
+$SNIPPET('autoinstall_start')
+%end
+
+%packages
+@^minimal-environment
+chrony
+python3
+nfs-utils
+%end
+
+%post --log=/root/ks-post.log
+# Time from the master (Ansible's chrony role takes over later)
+sed -i 's/^pool .*/server {{ master_cluster_ip }} iburst/' /etc/chrony.conf
+
+# Let Ansible on the master log in as root
+mkdir -p -m 0700 /root/.ssh
+cat >> /root/.ssh/authorized_keys <<'PUBKEY'
+{{ cobbler_master_pubkey }}
+PUBKEY
+chmod 0600 /root/.ssh/authorized_keys
+restorecon -R /root/.ssh
+
+# Tells Cobbler the install finished (needed for pxe_just_once)
+$SNIPPET('autoinstall_done')
+%end

@@ -1,0 +1,14 @@
+---
+- name: Create the slurmd spool directory
+  ansible.builtin.file:
+    path: "{{ slurm_spool_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Start slurmd
+  ansible.builtin.systemd:
+    name: slurmd
+    state: started
+    enabled: true

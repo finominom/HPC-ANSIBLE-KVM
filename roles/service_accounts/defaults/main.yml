@@ -1,0 +1,31 @@
+---
+# Same IDs on every node. 5000-5099 cluster groups/users, 5100+ services.
+service_groups:
+  - { name: tutors, gid: 5000, system: false }
+  - { name: install, gid: 5001, system: false }
+  - { name: munge, gid: 5100, system: true }
+  - { name: slurm, gid: 5101, system: true }
+
+service_users:
+  # Builds software from source into /data/opt (exposed through Lmod)
+  - name: install
+    uid: 5001
+    group: install
+    groups: [tutors]
+    home: /home/install
+    shell: /bin/bash
+    system: false
+  - name: munge
+    uid: 5100
+    group: munge
+    groups: []
+    home: /var/run/munge
+    shell: /sbin/nologin
+    system: true
+  - name: slurm
+    uid: 5101
+    group: slurm
+    groups: []
+    home: /var/lib/slurm
+    shell: /sbin/nologin
+    system: true

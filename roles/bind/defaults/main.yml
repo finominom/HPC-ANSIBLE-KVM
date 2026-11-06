@@ -1,0 +1,20 @@
+---
+# Upstream resolvers for names outside the cluster (campus DNS, or 10.0.2.3
+# in VirtualBox). Empty list = resolve from the internet root servers.
+bind_forwarders: []
+
+# If external names fail with SERVFAIL behind a forwarder that strips
+# DNSSEC data, set this to "no".
+bind_dnssec_validation: "yes"
+
+# Forward zones: one per domain, built from cluster_hosts
+bind_forward_zones:
+  - { zone: "{{ cluster_domain }}", key: hpc }
+  - { zone: "{{ mgmt_domain }}", key: mgmt }
+
+# Reverse zones (/24 each), worked out from every address in cluster_hosts,
+# e.g. ['192.168.16', '192.168.17', '192.168.1', '192.168.2']
+bind_all_ips: >-
+  {{ (cluster_hosts | dict2items | map(attribute='value.hpc', default='') | list)
+     + (cluster_hosts | dict2items | map(attribute='value.mgmt', default='') | list) }}
+bind_reverse_nets: "{{ bind_all_ips | reject('equalto', '') | map('regex_replace', '\\.[0-9]+$', '') | unique | list }}"

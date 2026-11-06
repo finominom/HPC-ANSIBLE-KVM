@@ -1,0 +1,6 @@
+# {{ ansible_managed }}
+# Settings recommended in the Slurm accounting documentation.
+[mysqld]
+innodb_buffer_pool_size={{ slurm_innodb_buffer_pool_size }}
+innodb_log_file_size=64M
+innodb_lock_wait_timeout=900

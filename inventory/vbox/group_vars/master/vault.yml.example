@@ -1,0 +1,10 @@
+---
+# Copy to vault.yml in this folder, fill in, then:
+#   ansible-vault encrypt inventory/vbox/group_vars/master/vault.yml
+
+# Slurm accounting database password:  openssl rand -base64 24
+vault_slurm_db_pass: "CHANGE-ME"
+
+# Root password for nodes installed by Cobbler (a hash, not the password):
+#   openssl passwd -6
+vault_node_root_password_hash: "$6$CHANGE-ME"

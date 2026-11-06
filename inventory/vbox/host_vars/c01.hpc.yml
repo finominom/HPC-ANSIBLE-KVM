@@ -1,0 +1,9 @@
+---
+# Values for Slurm. Until c01 exists, these match the VM you plan to build
+# (2 vCPU, 2 GB RAM). Once it is installed, replace with `slurmd -C` output
+# (everything between "NodeName=c01" and "UpTime=").
+slurm_node_params: "CPUs=2 Boards=1 SocketsPerBoard=1 CoresPerSocket=2 ThreadsPerCore=1 RealMemory=1800"
+
+# MAC of the VM's network adapter (Settings > Network > Adapter 1 > Advanced).
+# Uncomment to let Cobbler create the system record.
+# cobbler_mac: "08:00:27:00:00:01"

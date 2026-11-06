@@ -1,0 +1,6 @@
+---
+# Some variables are deliberately shared between roles (e.g. nfs_export_home
+# in nfs_server and nfs_client), so the role-prefix naming rule is skipped.
+skip_list:
+  - var-naming[no-role-prefix]
+  - fqcn[canonical]   # community.mysql is what EL9 hosts have installed

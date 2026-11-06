@@ -1,0 +1,40 @@
+---
+# Local RPM repository served over HTTP to the cluster (runbook 9.2).
+# Add packages later with:
+#   cp *.rpm /var/www/html/foo/ && createrepo_c --update /var/www/html/foo
+- name: Install httpd and createrepo_c
+  ansible.builtin.dnf:
+    name: [httpd, createrepo_c]
+    state: present
+
+- name: Create the repository folder
+  ansible.builtin.file:
+    path: "{{ localrepo_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create the repository metadata (first run only)
+  ansible.builtin.command: createrepo_c {{ localrepo_dir }}
+  args:
+    creates: "{{ localrepo_dir }}/repodata/repomd.xml"
+
+- name: Restore SELinux labels so httpd can serve the files
+  ansible.builtin.command: restorecon -Rv {{ localrepo_dir }}
+  register: localrepo_restorecon
+  changed_when: localrepo_restorecon.stdout | length > 0
+
+- name: Start httpd
+  ansible.builtin.systemd:
+    name: httpd
+    state: started
+    enabled: true
+
+- name: Serve HTTP on the internal networks only
+  ansible.posix.firewalld:
+    zone: internal
+    service: http
+    permanent: true
+    immediate: true
+    state: enabled

@@ -1,0 +1,20 @@
+{% set body %}
+@          IN NS   master.{{ cluster_domain }}.
+{% for name, addr in cluster_hosts | dictsort %}
+{% for key, dom in [('hpc', cluster_domain), ('mgmt', mgmt_domain)] %}
+{% if addr[key] is defined and addr[key].startswith(item ~ '.') %}
+{{ '%-10s' | format(addr[key].split('.')[-1]) }} IN PTR  {{ name }}.{{ dom }}.
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% endset -%}
+; {{ ansible_managed }}
+; Reverse zone for {{ item }}.0/24, generated from cluster_hosts.
+$TTL 3600
+@   IN SOA master.{{ cluster_domain }}. hostmaster.{{ cluster_domain }}. (
+        {{ (body | hash('md5'))[:7] | int(0, 16) }} ; serial
+        3600       ; refresh
+        900        ; retry
+        1209600    ; expire
+        300 )      ; negative cache
+{{ body }}

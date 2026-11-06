@@ -1,0 +1,30 @@
+---
+- name: Install chrony
+  ansible.builtin.dnf:
+    name: chrony
+    state: present
+
+- name: Deploy chrony.conf
+  ansible.builtin.template:
+    src: chrony.conf.j2
+    dest: /etc/chrony.conf
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+  notify: Restart chronyd
+
+- name: Start chronyd
+  ansible.builtin.systemd:
+    name: chronyd
+    state: started
+    enabled: true
+
+- name: Serve time on the internal networks
+  ansible.posix.firewalld:
+    zone: internal
+    service: ntp
+    permanent: true
+    immediate: true
+    state: enabled
+  when: chrony_is_server | bool

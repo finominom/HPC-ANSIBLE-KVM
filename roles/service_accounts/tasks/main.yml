@@ -1,0 +1,50 @@
+---
+# Changing the UID of an existing account leaves its files owned by the old
+# number, so stop instead of "fixing" it silently.
+- name: Look up existing accounts
+  ansible.builtin.command: getent passwd {{ item.name }}
+  register: sa_existing
+  changed_when: false
+  failed_when: false
+  loop: "{{ service_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Stop if an account already exists with a different UID
+  ansible.builtin.assert:
+    that: item.rc != 0 or (item.stdout.split(':')[2] | int) == item.item.uid
+    fail_msg: >-
+      {{ item.item.name }} already exists with UID {{ item.stdout.split(':')[2] | default('?') }},
+      not {{ item.item.uid }}. Stop the services using it, then change it with
+      usermod/groupmod and fix file ownership (find / -uid OLD), or remove it.
+    quiet: true
+  loop: "{{ sa_existing.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Create the groups
+  ansible.builtin.group:
+    name: "{{ item.name }}"
+    gid: "{{ item.gid }}"
+    system: "{{ item.system }}"
+    state: present
+  loop: "{{ service_groups }}"
+  loop_control:
+    label: "{{ item.name }} ({{ item.gid }})"
+
+- name: Create the users
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    uid: "{{ item.uid }}"
+    group: "{{ item.group }}"
+    groups: "{{ item.groups }}"
+    append: true
+    home: "{{ item.home }}"
+    shell: "{{ item.shell }}"
+    system: "{{ item.system }}"
+    create_home: false
+    comment: "{{ item.name }} account (managed by Ansible)"
+    state: present
+  loop: "{{ service_users }}"
+  loop_control:
+    label: "{{ item.name }} ({{ item.uid }})"

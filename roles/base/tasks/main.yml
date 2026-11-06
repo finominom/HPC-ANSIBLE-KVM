@@ -1,0 +1,184 @@
+---
+- name: Set the host name
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+
+- name: Set the time zone
+  community.general.timezone:
+    name: "{{ cluster_timezone }}"
+
+# ---------- STOP GATE B, checked in code ----------
+- name: Check the master interfaces have their planned addresses
+  ansible.builtin.assert:
+    that:
+      - ansible_facts[item.dev | replace('-', '_')] is defined
+      - (ansible_facts[item.dev | replace('-', '_')].ipv4.address | default('')) == item.ip
+    fail_msg: >-
+      {{ item.dev }} should have {{ item.ip }} (runbook Phase 2). Set it with
+      nmcli, or fix master_if_* in group_vars/master/main.yml, then re-run.
+    quiet: true
+  loop:
+    - { dev: "{{ master_if_mgmt }}", ip: "{{ master_mgmt_ip }}" }
+    - { dev: "{{ master_if_cluster }}", ip: "{{ master_cluster_ip }}" }
+  when: base_is_master | bool
+
+- name: Check the only default route is via the external interface
+  ansible.builtin.assert:
+    that: (ansible_facts.default_ipv4.interface | default('')) == master_if_external
+    fail_msg: >-
+      The default route must go via {{ master_if_external }}. Set
+      ipv4.never-default yes on the management and cluster connections.
+    quiet: true
+  when: base_is_master | bool
+
+# ---------- Repositories ----------
+- name: Enable CRB and EPEL (hosts with internet access)
+  when: base_is_master | bool or cluster_pkg_source == 'nat'
+  block:
+    - name: Enable CRB
+      community.general.dnf_config_manager:
+        name: crb
+        state: enabled
+
+    - name: Install EPEL
+      ansible.builtin.dnf:
+        name: epel-release
+        state: present
+
+- name: Point compute nodes at the master's repositories (Option A)
+  when: not (base_is_master | bool) and cluster_pkg_source == 'local'
+  block:
+    - name: Add the master's repositories
+      ansible.builtin.template:
+        src: hpc-local.repo.j2
+        dest: /etc/yum.repos.d/hpc-local.repo
+        owner: root
+        group: root
+        mode: "0644"
+
+    # Edit the repo files directly: dnf_config_manager runs "dnf repolist", which
+    # tries to reach the internet repos first and fails on a node without internet.
+    - name: Disable the internet repositories
+      community.general.ini_file:
+        path: "/etc/yum.repos.d/almalinux-{{ item }}.repo"
+        section: "{{ item }}"
+        option: enabled
+        value: "0"
+        no_extra_spaces: true
+        create: false
+      loop: [baseos, appstream, extras]
+
+    # Nodes are installed from the ISO; the mirror keeps only the newest builds.
+    - name: Bring the node up to date from the master's mirror
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+
+# ---------- Packages and services ----------
+- name: Install the base packages
+  ansible.builtin.dnf:
+    name: "{{ base_packages }}"
+    state: present
+
+- name: Start firewalld and sshd
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop: [firewalld, sshd]
+
+# ---------- Firewall zones (runbook Phase 3) ----------
+- name: Find the NetworkManager connection of each interface
+  ansible.builtin.command: nmcli -g GENERAL.CONNECTION device show {{ item.dev }}
+  register: base_nm_conn
+  changed_when: false
+  loop: "{{ base_zone_map }}"
+
+- name: Require a NetworkManager connection on each interface
+  ansible.builtin.assert:
+    that: item.stdout | length > 0
+    fail_msg: "{{ item.item.dev }} has no active NetworkManager connection. Bring it up with nmcli first."
+    quiet: true
+  loop: "{{ base_nm_conn.results }}"
+  loop_control:
+    label: "{{ item.item.dev }}"
+
+- name: Read the current zone of each connection
+  ansible.builtin.command: nmcli -g connection.zone connection show "{{ item.stdout }}"
+  register: base_nm_zone
+  changed_when: false
+  loop: "{{ base_nm_conn.results }}"
+  loop_control:
+    label: "{{ item.item.dev }}"
+
+# nmcli makes it permanent; firewall-cmd applies it now without
+# restarting the connection (so an SSH session over it is not dropped).
+- name: Put each interface in its firewall zone
+  ansible.builtin.shell: |
+    nmcli connection modify "{{ item.item.stdout }}" connection.zone {{ item.item.item.zone }}
+    firewall-cmd --zone={{ item.item.item.zone }} --change-interface={{ item.item.item.dev }}
+  when: item.stdout != item.item.item.zone
+  changed_when: true
+  loop: "{{ base_nm_zone.results }}"
+  loop_control:
+    label: "{{ item.item.item.dev }} -> {{ item.item.item.zone }}"
+
+- name: Trim services the cluster does not use from the internal zone
+  ansible.posix.firewalld:
+    zone: internal
+    service: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: disabled
+  loop: [mdns, samba-client, dhcpv6-client]
+
+- name: Keep SSH open in the internal zone
+  ansible.posix.firewalld:
+    zone: internal
+    service: ssh
+    permanent: true
+    immediate: true
+    state: enabled
+
+# ---------- Option B: NAT for the cluster network (runbook 9.4) ----------
+- name: Let the cluster network reach the internet through the master
+  when: base_is_master | bool and cluster_pkg_source == 'nat'
+  block:
+    - name: Masquerade traffic leaving the external zone
+      ansible.posix.firewalld:
+        zone: public
+        masquerade: true
+        permanent: true
+        immediate: true
+        state: enabled
+
+    - name: Check for the cluster-to-internet policy
+      ansible.builtin.command: firewall-cmd --permanent --info-policy=hpc-out
+      register: base_nat_policy
+      changed_when: false
+      failed_when: false
+
+    - name: Create the cluster-to-internet policy
+      ansible.builtin.shell: |
+        set -e
+        firewall-cmd --permanent --new-policy=hpc-out
+        firewall-cmd --permanent --policy=hpc-out --add-ingress-zone=internal
+        firewall-cmd --permanent --policy=hpc-out --add-egress-zone=public
+        firewall-cmd --permanent --policy=hpc-out --set-target=ACCEPT
+        firewall-cmd --reload
+      when: base_nat_policy.rc != 0
+      changed_when: true
+
+# ---------- Master: SSH key and build notes (runbook Phases 0 and 7) ----------
+- name: Create the master's root SSH key (never overwrites an existing one)
+  ansible.builtin.command: ssh-keygen -t ed25519 -N '' -f /root/.ssh/id_ed25519
+  args:
+    creates: /root/.ssh/id_ed25519
+  when: base_is_master | bool
+
+- name: Create the build notes folder
+  ansible.builtin.file:
+    path: /root/hpc-build-notes
+    state: directory
+    mode: "0700"
+  when: base_is_master | bool

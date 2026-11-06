@@ -1,0 +1,17 @@
+---
+# Master NICs inside the VirtualBox VM. Check with `ip -br link` and
+# compare MAC addresses with the VM's Settings > Network.
+master_if_external: enp0s3   # Adapter 1, NAT
+master_if_mgmt: enp0s8       # Adapter 2, Internal Network "mgmt"
+master_if_cluster: enp0s9    # Adapter 3, Internal Network "hpc"
+
+# VirtualBox NAT DNS
+bind_forwarders: [10.0.2.3]
+
+# Small VM - no separate /data disk needed for practice
+nfs_require_separate_data_fs: false
+slurm_innodb_buffer_pool_size: 256M
+
+cobbler_iso_path: /srv/isos/AlmaLinux-9.8-x86_64-dvd.iso
+# Keep false until STOP GATE D in the runbook has passed.
+cobbler_run_sync: false

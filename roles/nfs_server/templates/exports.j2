@@ -1,0 +1,4 @@
+# {{ ansible_managed }}
+# Cluster network only. root_squash: root on a node is not root on the share.
+{{ nfs_export_home }}  {{ cluster_net }}(rw,sync,root_squash)
+{{ nfs_export_opt }}   {{ cluster_net }}(ro,sync,root_squash)

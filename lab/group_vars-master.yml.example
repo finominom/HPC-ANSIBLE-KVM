@@ -1,0 +1,37 @@
+---
+# Lab values. Copy to /opt/hpc-ansible/group_vars/ (e.g. all.yml) and keep the two secrets in a vault.
+
+# media: the ISO already in /data/isos on the master
+hpc_media_version: "9.8"
+hpc_media_name: "AlmaLinux-9-minimal"            # distro becomes AlmaLinux-9-minimal-x86_64
+hpc_iso_file: "AlmaLinux-9-latest-x86_64-minimal.iso"
+hpc_iso_sha256: "FILL_IN_sha256sum_OF_THAT_FILE"
+hpc_profile: "alma9-min"                          # reuse the existing profile (the role switches it to hpc-compute.ks)
+
+# network (matches the sheet: internal 192.168.16.0/20, master 192.168.16.1)
+hpc_master_ip: "192.168.16.1"
+hpc_dhcp_subnet: "192.168.16.0"
+hpc_netmask: "255.255.240.0"
+hpc_boot_nic: "link"                              # the node has ONE NIC in the lab; "link" = first NIC with link
+
+hpc_nodes:
+  - { name: c01, mac: "52:54:00:aa:bb:01", ip: "192.168.17.1" }
+
+# secrets (vault)
+hpc_root_password_hash: "{{ vault_root_password_hash }}"     # openssl passwd -6
+hpc_ipmi_password: "{{ vault_ipmi_password }}"                # the VBMC_PASS used on the host
+
+# VirtualBMC: one port per node on the host (c01 -> 6231, c02 -> 6232)
+hpc_ipmi_set_bootdev: false
+hpc_ipmi_function: |
+  ipmi() { local node=$1; shift; local n=$((10#${node#c})); ipmitool -I lanplus -H 192.168.0.254 -p $((6230+n)) -U mhpc -f /root/.ipmi-mhpc "$@"; }
+
+# smaller layout, fits any lab disk (defaults 51200/8192 need a ~62 GB disk)
+hpc_root_mb: 20480
+hpc_swap_mb: 2048
+
+# first end-to-end run: only check what the lab can satisfy
+hpc_validate_time_sync: false        # isolated network, no time source
+hpc_validate_hosts: []               # no DNS server for master.hpc on the nodes
+hpc_validate_users: []
+hpc_validate_packages: []            # openmpi etc. come later from the local repo

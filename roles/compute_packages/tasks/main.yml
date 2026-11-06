@@ -1,0 +1,10 @@
+---
+- name: Stage node packages into the local repo (master)
+  ansible.builtin.include_tasks: stage.yml
+  when: hpc_packages_action == 'stage'
+  tags: [packages]
+
+- name: Install node packages from the local repo (compute nodes)
+  ansible.builtin.include_tasks: install.yml
+  when: hpc_packages_action == 'install'
+  tags: [packages]

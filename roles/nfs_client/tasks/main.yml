@@ -1,0 +1,36 @@
+---
+- name: Install NFS and autofs
+  ansible.builtin.dnf:
+    name: [nfs-utils, autofs]
+    state: present
+
+- name: Allow home folders on NFS under SELinux
+  ansible.posix.seboolean:
+    name: use_nfs_home_dirs
+    state: true
+    persistent: true
+  when: ansible_facts.selinux.status | default('disabled') == 'enabled'
+
+# /home/USER -> master:/data/home/USER (read-write)
+# /data/opt  -> master:/data/opt       (read-only, for Lmod software)
+- name: Deploy the autofs maps
+  ansible.builtin.copy:
+    dest: "{{ item.dest }}"
+    content: "{{ item.content }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - { dest: /etc/auto.master.d/home.autofs, content: "/home  /etc/auto.home\n" }
+    - { dest: /etc/auto.home, content: "*  -rw,hard  {{ nfs_server_host }}:{{ nfs_export_home }}/&\n" }
+    - { dest: /etc/auto.master.d/opt.autofs, content: "/-  /etc/auto.opt\n" }
+    - { dest: /etc/auto.opt, content: "{{ nfs_export_opt }}  -ro,hard  {{ nfs_server_host }}:{{ nfs_export_opt }}\n" }
+  loop_control:
+    label: "{{ item.dest }}"
+  notify: Restart autofs
+
+- name: Start autofs
+  ansible.builtin.systemd:
+    name: autofs
+    state: started
+    enabled: true

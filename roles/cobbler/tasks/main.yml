@@ -1,0 +1,254 @@
+---
+- name: Check the node root password hash is set
+  ansible.builtin.assert:
+    that:
+      - vault_node_root_password_hash is defined
+      - vault_node_root_password_hash is match('^\$6\$')
+      - "'CHANGE-ME' not in vault_node_root_password_hash"
+    fail_msg: "Set vault_node_root_password_hash (output of: openssl passwd -6) in group_vars/master/vault.yml."
+    quiet: true
+
+- name: Install Cobbler, DHCP, TFTP and boot loaders
+  ansible.builtin.dnf:
+    name: "{{ cobbler_packages }}"
+    state: present
+
+- name: Show the installed Cobbler version
+  ansible.builtin.command: rpm -q cobbler  # noqa: command-instead-of-module
+  register: cobbler_rpm
+  changed_when: false
+
+# ---------- settings.yaml ----------
+- name: Check settings.yaml has the keys this role sets
+  ansible.builtin.command: grep -qE '^{{ item.key }}:' /etc/cobbler/settings.yaml
+  register: cobbler_keys
+  changed_when: false
+  failed_when: false
+  loop: "{{ cobbler_settings | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Stop if a key is missing (different Cobbler version)
+  ansible.builtin.assert:
+    that: cobbler_keys.results | selectattr('rc', 'ne', 0) | list | length == 0
+    fail_msg: >-
+      {{ cobbler_rpm.stdout }}: settings.yaml has no
+      {{ cobbler_keys.results | selectattr('rc', 'ne', 0) | map(attribute='item.key') | join(', ') }}.
+      Check the key names for this version before continuing.
+    quiet: true
+
+- name: Configure settings.yaml
+  ansible.builtin.lineinfile:
+    path: /etc/cobbler/settings.yaml
+    regexp: "^{{ item.key }}:"
+    line: "{{ item.key }}: {{ item.value | to_json }}"
+    backup: true
+  loop: "{{ cobbler_settings | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  no_log: true   # contains the root password hash
+  notify: Restart cobblerd
+
+# ---------- dhcp.template: only the cluster subnet ----------
+- name: Count subnet blocks in dhcp.template
+  ansible.builtin.command: grep -c '^subnet ' /etc/cobbler/dhcp.template
+  register: cobbler_subnets
+  changed_when: false
+  failed_when: false
+
+- name: Stop unless dhcp.template has exactly one subnet block
+  ansible.builtin.assert:
+    that: cobbler_subnets.stdout == '1'
+    fail_msg: "Expected one 'subnet' block in /etc/cobbler/dhcp.template, found {{ cobbler_subnets.stdout }}. Edit it by hand."
+    quiet: true
+
+# Replaces the sample subnet; the per-system loop below it is kept.
+- name: Set the cluster subnet in dhcp.template
+  ansible.builtin.replace:
+    path: /etc/cobbler/dhcp.template
+    regexp: '(?ms)^subnet .*?^\}'
+    replace: |-
+      subnet {{ cluster_net.split('/')[0] }} netmask {{ cluster_netmask }} {
+          option subnet-mask         {{ cluster_netmask }};
+          option domain-name         "{{ cluster_domain }}";
+          option domain-name-servers {{ master_cluster_ip }};
+      {% if cluster_pkg_source == 'nat' %}
+          option routers             {{ master_cluster_ip }};
+      {% endif %}
+          range dynamic-bootp        {{ cobbler_dynamic_range[0] }} {{ cobbler_dynamic_range[1] }};
+          default-lease-time         21600;
+          max-lease-time             43200;
+          next-server                $next_server_v4;
+          filename                   "pxelinux.0";
+      }
+    backup: true
+  notify: Restart cobblerd
+
+# ---------- SELinux, services, firewall ----------
+- name: Allow httpd and Cobbler to talk over the network (SELinux)
+  ansible.posix.seboolean:
+    name: "{{ item }}"
+    state: true
+    persistent: true
+  loop: [httpd_can_network_connect_cobbler, cobbler_can_network_connect]
+  when: ansible_facts.selinux.status | default('disabled') == 'enabled'
+
+- name: Start cobblerd, httpd and TFTP
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop: [cobblerd, httpd, tftp.socket]
+
+- name: Open provisioning services on the internal networks
+  ansible.posix.firewalld:
+    zone: internal
+    service: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: [tftp, dhcp, http, https]
+
+- name: Apply settings changes before using the cobbler command
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for cobblerd
+  ansible.builtin.wait_for:
+    port: 25151
+    timeout: 60
+
+# Cobbler 3.3+ builds its boot loaders with `cobbler mkloaders`.
+- name: Build the boot loaders
+  ansible.builtin.command: cobbler mkloaders
+  args:
+    creates: /var/lib/cobbler/loaders/pxelinux.0
+  register: cobbler_mkloaders
+  failed_when: false
+
+- name: Report a boot loader problem
+  ansible.builtin.debug:
+    msg: "cobbler mkloaders failed: {{ cobbler_mkloaders.stderr | default('') }} - check `cobbler check`."
+  when: cobbler_mkloaders.rc | default(0) != 0
+
+# ---------- Kickstart ----------
+- name: Read the master's root public key
+  ansible.builtin.slurp:
+    src: /root/.ssh/id_ed25519.pub
+  register: cobbler_pubkey_raw
+
+- name: Deploy the Kickstart template
+  ansible.builtin.template:
+    src: hpc-minimal.ks.j2
+    dest: /var/lib/cobbler/templates/{{ cobbler_autoinstall_template }}
+    owner: root
+    group: root
+    mode: "0644"
+  vars:
+    cobbler_master_pubkey: "{{ cobbler_pubkey_raw.content | b64decode | trim }}"
+
+# ---------- Import the OS media (once) ----------
+- name: Check whether the distro is already imported
+  ansible.builtin.command: cobbler distro find --name={{ cobbler_profile_name }}
+  register: cobbler_distro
+  changed_when: false
+
+- name: Check for the ISO
+  ansible.builtin.stat:
+    path: "{{ cobbler_iso_path }}"
+  register: cobbler_iso
+
+- name: Explain how to provide the ISO
+  ansible.builtin.debug:
+    msg: >-
+      {{ cobbler_iso_path }} not found - skipping the import. Download the
+      AlmaLinux 9.8 DVD ISO, check it against CHECKSUM, put it there and re-run.
+  when: cobbler_distro.stdout | length == 0 and not cobbler_iso.stat.exists
+
+- name: Import the AlmaLinux media
+  when: cobbler_distro.stdout | length == 0 and cobbler_iso.stat.exists
+  block:
+    - name: Create the mount point
+      ansible.builtin.file:
+        path: "{{ cobbler_iso_mount }}"
+        state: directory
+        mode: "0755"
+
+    - name: Mount the ISO  # noqa: command-instead-of-module (temporary, unmounted below)
+      ansible.builtin.command: mount -o loop,ro {{ cobbler_iso_path }} {{ cobbler_iso_mount }}
+      changed_when: true
+
+    - name: Import into Cobbler (takes several minutes)
+      ansible.builtin.command: >-
+        cobbler import --name={{ cobbler_distro_name }} --arch={{ cobbler_arch }}
+        --path={{ cobbler_iso_mount }}
+      changed_when: true
+  always:
+    - name: Unmount the ISO
+      ansible.builtin.command: umount {{ cobbler_iso_mount }}
+      changed_when: true
+      failed_when: false
+
+- name: Read the profile
+  ansible.builtin.command: cobbler profile report --name={{ cobbler_profile_name }}
+  register: cobbler_profile
+  changed_when: false
+  failed_when: false
+
+- name: Use the HPC Kickstart for the profile
+  ansible.builtin.command: >-
+    cobbler profile edit --name={{ cobbler_profile_name }}
+    --autoinstall={{ cobbler_autoinstall_template }}
+  changed_when: true
+  when:
+    - cobbler_profile.rc == 0
+    - cobbler_autoinstall_template not in cobbler_profile.stdout
+
+# ---------- System records for compute nodes with a known MAC ----------
+- name: List existing system records
+  ansible.builtin.command: cobbler system list
+  register: cobbler_systems
+  changed_when: false
+
+- name: Add compute nodes to Cobbler
+  ansible.builtin.command: >-
+    cobbler system add
+    --name={{ hostvars[item].inventory_hostname_short }}
+    --profile={{ cobbler_profile_name }}
+    --hostname={{ item }}
+    --interface={{ hostvars[item].node_if_cluster }}
+    --mac={{ hostvars[item].cobbler_mac }}
+    --ip-address={{ cluster_hosts[hostvars[item].inventory_hostname_short].hpc }}
+    --netmask={{ cluster_netmask }}
+    --static=true
+    --name-servers={{ master_cluster_ip }}
+    {{ ('--gateway=' ~ master_cluster_ip) if cluster_pkg_source == 'nat' else '' }}
+  changed_when: true
+  loop: "{{ groups['compute'] | default([]) }}"
+  when:
+    - cobbler_profile.rc == 0
+    - hostvars[item].cobbler_mac is defined
+    - hostvars[item].inventory_hostname_short not in cobbler_systems.stdout_lines | map('trim') | list
+
+- name: Run cobbler check
+  ansible.builtin.command: cobbler check
+  register: cobbler_check
+  changed_when: false
+  failed_when: false
+
+- name: Show cobbler check
+  ansible.builtin.debug:
+    var: cobbler_check.stdout_lines
+
+# ---------- STOP GATE D ----------
+- name: Sync Cobbler (writes dhcpd.conf, starts DHCP on the cluster network)
+  ansible.builtin.command: cobbler sync
+  when: cobbler_run_sync | bool
+  changed_when: true
+
+- name: Remind about the stop gate
+  ansible.builtin.debug:
+    msg: >-
+      cobbler sync NOT run (cobbler_run_sync is false). Read the rendered
+      Kickstart: `cobbler system get-autoinstall --name=c01`, fix anything
+      `cobbler check` reports, then re-run with -e cobbler_run_sync=true --tags cobbler.
+  when: not (cobbler_run_sync | bool)

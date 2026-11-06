@@ -1,0 +1,54 @@
+---
+- name: Create the Slurm configuration directory
+  ansible.builtin.file:
+    path: "{{ slurm_conf_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create the Slurm log directory
+  ansible.builtin.file:
+    path: "{{ slurm_log_dir }}"
+    state: directory
+    owner: slurm
+    group: slurm
+    mode: "0755"
+
+# /run is wiped at boot, so the PID directory is recreated by systemd-tmpfiles.
+- name: Recreate the Slurm PID directory at boot
+  ansible.builtin.template:
+    src: slurm-tmpfiles.conf.j2
+    dest: /etc/tmpfiles.d/slurm-ansible.conf
+    owner: root
+    group: root
+    mode: "0644"
+  register: slurm_tmpfiles
+
+- name: Create the Slurm PID directory now  # noqa: no-handler (must exist before the daemons start)
+  ansible.builtin.command: systemd-tmpfiles --create /etc/tmpfiles.d/slurm-ansible.conf
+  when: slurm_tmpfiles is changed
+  changed_when: true
+
+# Identical slurm.conf and cgroup.conf on every node.
+- name: Deploy slurm.conf
+  ansible.builtin.template:
+    src: slurm.conf.j2
+    dest: "{{ slurm_conf_dir }}/slurm.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Restart slurmctld
+    - Restart slurmd
+
+- name: Deploy cgroup.conf (AlmaLinux 9 uses cgroup v2)
+  ansible.builtin.template:
+    src: cgroup.conf.j2
+    dest: "{{ slurm_conf_dir }}/cgroup.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Restart slurmctld
+    - Restart slurmd

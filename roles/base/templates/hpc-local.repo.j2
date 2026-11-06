@@ -1,0 +1,17 @@
+# {{ ansible_managed }}
+# Compute nodes install only from the master's mirrors (cluster_pkg_source: local).
+# Built on the master in /data/repos, served at http://<master>/repos/<name>.
+{% for r in ['baseos', 'appstream', 'crb'] %}
+[hpc-{{ r }}]
+name=AlmaLinux {{ r }} (master mirror)
+baseurl=http://{{ master_cluster_ip }}/repos/{{ r }}
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-9
+
+{% endfor %}
+[hpc-epel-lmod]
+name=EPEL subset for Slurm and Lmod (master mirror)
+baseurl=http://{{ master_cluster_ip }}/repos/epel-lmod
+enabled=1
+gpgcheck=0

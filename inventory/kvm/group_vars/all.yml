@@ -1,0 +1,33 @@
+---
+# Cluster-wide settings - KVM/libvirt rehearsal
+cluster_name: hpc
+cluster_domain: hpc
+mgmt_domain: mgmt
+cluster_timezone: Africa/Lagos
+
+cluster_net: 192.168.16.0/20
+cluster_netmask: 255.255.240.0
+mgmt_net: 192.168.0.0/20
+
+master_cluster_ip: 192.168.16.1
+master_mgmt_ip: 192.168.1.1
+
+# How compute nodes get packages:
+#   nat   = through the master to internet repos (runbook Option B)
+#   local = only the master's Cobbler mirror + local repo (Option A)
+# nat is simplest for the rehearsal: Slurm comes straight from EPEL.
+cluster_pkg_source: local
+
+# Every name DNS should know.
+#   hpc  = OS address on the cluster network
+#   mgmt = BMC address (for the master: its management NIC)
+cluster_hosts:
+  master: { hpc: 192.168.16.1, mgmt: 192.168.1.1 }
+  c01: { hpc: 192.168.17.1, mgmt: 192.168.2.1 }
+  c02: { hpc: 192.168.17.2, mgmt: 192.168.2.2 }
+
+# OS media imported into Cobbler (profile = <name>-<arch>)
+cobbler_distro_name: AlmaLinux-9.8
+cobbler_arch: x86_64
+
+slurm_compute_group: slurm_nodes

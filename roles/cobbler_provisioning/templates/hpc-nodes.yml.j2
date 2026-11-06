@@ -1,0 +1,9 @@
+{# Every host in the compute group that has a cobbler_mac in host_vars.
+   name = short hostname, ip = cluster_hosts[name].hpc, interface = node_if_cluster #}
+{% for h in groups[hpc_compute_group] | default([]) if hostvars[h].cobbler_mac is defined %}
+{% set short = h.split('.')[0] %}
+- name: "{{ short }}"
+  mac: "{{ hostvars[h].cobbler_mac | lower }}"
+  ip: "{{ cluster_hosts[short].hpc }}"
+  interface: "{{ hostvars[h].node_if_cluster | default(hpc_cobbler_iface) }}"
+{% endfor %}

@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch Cobbler install events for HPC compute nodes
+
+[Path]
+PathExistsGlob=/var/lib/cobbler/hpc-queue/*
+Unit=hpc-provision.service
+
+[Install]
+WantedBy=multi-user.target

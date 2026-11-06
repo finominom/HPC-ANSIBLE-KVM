@@ -1,0 +1,3 @@
+---
+# Compute VMs have one adapter (Internal Network "hpc"), seen as enp0s3.
+node_if_cluster: enp0s3

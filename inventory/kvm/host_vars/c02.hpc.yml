@@ -1,0 +1,3 @@
+---
+slurm_node_params: "CPUs=2 Boards=1 SocketsPerBoard=2 CoresPerSocket=1 ThreadsPerCore=1 RealMemory=3400"
+cobbler_mac: "52:54:00:aa:bb:02"

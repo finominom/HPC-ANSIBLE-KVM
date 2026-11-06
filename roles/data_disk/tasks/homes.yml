@@ -1,0 +1,69 @@
+---
+- name: Require the data disk to be mounted before moving anything
+  ansible.builtin.command: mountpoint -q {{ data_disk_mount }}
+  changed_when: false
+
+- name: Look at each home folder
+  ansible.builtin.stat:
+    path: "/home/{{ item }}"
+  loop: "{{ data_disk_move_homes }}"
+  register: data_disk_home_src
+
+- name: Look at where each home would go
+  ansible.builtin.stat:
+    path: "{{ data_disk_mount }}/home/{{ item }}"
+  loop: "{{ data_disk_move_homes }}"
+  register: data_disk_home_dst
+
+- name: Stop if a home exists in both places
+  ansible.builtin.assert:
+    that: >-
+      not (data_disk_home_src.results[idx].stat.isdir | default(false)
+           and data_disk_home_dst.results[idx].stat.exists)
+    fail_msg: >-
+      /home/{{ item }} and {{ data_disk_mount }}/home/{{ item }} both exist.
+      Merge them by hand; nothing was moved.
+  loop: "{{ data_disk_move_homes }}"
+  loop_control:
+    index_var: idx
+
+- name: Check the users are logged out
+  ansible.builtin.command: pgrep -u {{ item.item }}
+  loop: "{{ data_disk_home_src.results }}"
+  when: item.stat.isdir | default(false) and not item.stat.islnk
+  register: data_disk_procs
+  changed_when: false
+  failed_when: false
+
+- name: Stop if a user still has processes
+  ansible.builtin.assert:
+    that: item.rc | default(1) == 1
+    fail_msg: >-
+      {{ item.item.item }} is still logged in or has processes. Log that user
+      out (use a console login as root) and run the play again.
+  loop: "{{ data_disk_procs.results }}"
+  when: item.rc is defined
+
+- name: Move the home folders
+  ansible.builtin.command: mv /home/{{ item }} {{ data_disk_mount }}/home/{{ item }}
+  args:
+    creates: "{{ data_disk_mount }}/home/{{ item }}"
+    removes: "/home/{{ item }}"
+  loop: "{{ data_disk_move_homes }}"
+
+- name: Label the data homes like /home
+  ansible.builtin.command: semanage fcontext -a -e /home {{ data_disk_mount }}/home
+  register: data_disk_equiv
+  changed_when: data_disk_equiv.rc == 0
+  failed_when: data_disk_equiv.rc != 0 and 'already defined' not in data_disk_equiv.stderr
+  when:
+    - data_disk_selinux_home_equiv
+    - ansible_facts.selinux.status | default('disabled') == 'enabled'
+
+- name: Apply the labels
+  ansible.builtin.command: restorecon -Rv {{ data_disk_mount }}/home
+  register: data_disk_restorecon
+  changed_when: data_disk_restorecon.stdout | length > 0
+  when:
+    - data_disk_selinux_home_equiv
+    - ansible_facts.selinux.status | default('disabled') == 'enabled'

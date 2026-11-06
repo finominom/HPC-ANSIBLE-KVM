@@ -1,0 +1,31 @@
+---
+- name: Enable CRB (EPEL packages depend on it)
+  community.general.dnf_config_manager:
+    name: crb
+    state: enabled
+  when: slurm_use_epel | bool
+
+- name: Install EPEL
+  ansible.builtin.dnf:
+    name: epel-release
+    state: present
+  when: slurm_use_epel | bool
+
+- name: Install Munge and the Slurm client tools
+  ansible.builtin.dnf:
+    name:
+      - munge
+      - slurm
+    state: present
+
+- name: Install controller packages
+  ansible.builtin.dnf:
+    name: "{{ ['slurm-slurmctld'] + (['slurm-slurmdbd', 'mariadb-server', 'python3-PyMySQL'] if slurm_enable_accounting | bool else []) }}"
+    state: present
+  when: slurm_is_controller | bool
+
+- name: Install compute packages
+  ansible.builtin.dnf:
+    name: slurm-slurmd
+    state: present
+  when: slurm_is_compute | bool

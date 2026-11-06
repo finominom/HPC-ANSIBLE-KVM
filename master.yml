@@ -1,0 +1,17 @@
+---
+# Builds the master: runbook rev 1.1, Phases 1 and 3-9, plus Slurm.
+# Phase 0-2 (install AlmaLinux, set the static IPs) are done by hand first.
+# Cobbler is managed ONLY by cobbler_provisioning (the old "cobbler" role is retired).
+- name: Build the HPC master
+  hosts: master
+  become: true
+  roles:
+    - { role: base, tags: [base] }
+    - { role: service_accounts, tags: [service_accounts] }
+    - { role: chrony, tags: [chrony] }
+    - { role: bind, tags: [bind, dns] }
+    - { role: localrepo, tags: [localrepo] }
+    - { role: data_disk, tags: [data] }
+    - { role: nfs_server, tags: [nfs] }
+    - { role: cobbler_provisioning, tags: [cobbler, provisioning] }
+    - { role: slurm, tags: [slurm] }

@@ -1,0 +1,14 @@
+---
+- name: Format and mount the data disk
+  ansible.builtin.include_tasks: format.yml
+  when: data_disk_device | length > 0
+
+- name: Create the shared folders
+  ansible.builtin.include_tasks: dirs.yml
+  when: data_disk_device | length > 0
+
+- name: Move local home folders onto the data disk
+  ansible.builtin.include_tasks: homes.yml
+  when:
+    - data_disk_device | length > 0
+    - data_disk_move_homes | length > 0

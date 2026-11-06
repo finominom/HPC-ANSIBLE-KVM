@@ -1,0 +1,4 @@
+---
+# Replace with `slurmd -C` output from c01 (hyperthreading off: ThreadsPerCore=1).
+slurm_node_params: "CPUs=16 Boards=1 SocketsPerBoard=2 CoresPerSocket=8 ThreadsPerCore=1 RealMemory=63000"
+# cobbler_mac: "AA:BB:CC:DD:EE:01"   # eno1 MAC, from the BMC or the BIOS

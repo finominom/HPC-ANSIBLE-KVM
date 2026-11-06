@@ -1,0 +1,8 @@
+---
+# Runs ONLY the provisioning role on the master, so the older "cobbler" role (which tries
+# "cobbler import" on the Minimal ISO) is not involved.
+#   ansible-playbook master.yml --tags cobbler --ask-vault-pass   (ansible.cfg picks the inventory)
+- hosts: master.hpc
+  become: true
+  roles:
+    - cobbler_provisioning

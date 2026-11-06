@@ -1,0 +1,5 @@
+---
+- name: Restart cobblerd
+  ansible.builtin.systemd:
+    name: cobblerd
+    state: restarted

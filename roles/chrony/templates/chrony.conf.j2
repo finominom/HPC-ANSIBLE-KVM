@@ -1,0 +1,23 @@
+# {{ ansible_managed }}
+{% if chrony_is_server | bool %}
+# Master: sync from upstream, serve the cluster
+pool {{ chrony_upstream_pool }} iburst
+{% for net in chrony_allow %}
+allow {{ net }}
+{% endfor %}
+{% if chrony_local_stratum | bool %}
+# Isolated cluster: keep serving time from the local clock
+local stratum 10
+{% endif %}
+{% else %}
+# Compute node: sync from the master only
+server {{ master_cluster_ip }} iburst
+{% endif %}
+
+driftfile /var/lib/chrony/drift
+makestep 1.0 3
+rtcsync
+keyfile /etc/chrony.keys
+ntsdumpdir /var/lib/chrony
+leapsectz right/UTC
+logdir /var/log/chrony

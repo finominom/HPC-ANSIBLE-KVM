@@ -1,0 +1,101 @@
+---
+# Run on the KVM HOST (the laptop), not inside the master VM:
+#   sudo ansible-playbook -i inventory/kvm/cobbler.ini host-prep/compute-vms.yml
+#
+# Defines one libvirt VM per host in the 'compute' inventory group, using the
+# same cobbler_mac that the cobbler role gives Cobbler, so the two always match.
+# The VMs are defined but NOT started: start them only after the cobbler role
+# has run and Stop Gate D has passed (see KVM-NOTES.md).
+# Safe to run again: existing disks and VMs are left alone.
+- name: Define the compute node VMs
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: true
+  environment:
+    LIBVIRT_DEFAULT_URI: qemu:///system
+  tasks:
+    - name: Check the inventory describes at least one node
+      ansible.builtin.assert:
+        that: (groups['compute'] | default([]) | length) > 0
+        fail_msg: "The 'compute' inventory group is empty."
+        quiet: true
+
+    - name: Check every node has a usable MAC address
+      ansible.builtin.assert:
+        that: >-
+          hostvars[item].cobbler_mac is defined and
+          hostvars[item].cobbler_mac is match('^([0-9a-f]{2}:){5}[0-9a-f]{2}$')
+        fail_msg: >-
+          Set cobbler_mac in host_vars/{{ item }}.yml (lower-case, colons,
+          for example 52:54:00:aa:bb:01).
+        quiet: true
+      loop: "{{ groups['compute'] }}"
+
+    - name: Check the node MAC addresses are all different
+      ansible.builtin.assert:
+        that: >-
+          (groups['compute'] | map('extract', hostvars, 'cobbler_mac') | list | unique | length)
+          == (groups['compute'] | length)
+        fail_msg: Two nodes share a MAC address.
+        quiet: true
+
+    - name: Check the libvirt network exists
+      ansible.builtin.command: virsh net-info {{ hostvars[item].node_vm_libvirt_network }}
+      register: node_vm_net
+      changed_when: false
+      failed_when: node_vm_net.rc != 0
+      loop: "{{ groups['compute'] }}"
+      # If this fails: create the isolated network first (see KVM-NOTES.md).
+
+    - name: List the VMs that already exist
+      ansible.builtin.command: virsh list --all --name
+      register: node_vm_existing
+      changed_when: false
+
+    - name: Create each node's disk image
+      ansible.builtin.command: >-
+        qemu-img create -f qcow2
+        {{ hostvars[item].node_vm_image_dir }}/{{ hostvars[item].inventory_hostname_short }}.qcow2
+        {{ hostvars[item].node_vm_disk_gb }}G
+      args:
+        creates: "{{ hostvars[item].node_vm_image_dir }}/{{ hostvars[item].inventory_hostname_short }}.qcow2"
+      loop: "{{ groups['compute'] }}"
+
+    - name: Give the disk images the label QEMU needs
+      ansible.builtin.command: restorecon -v {{ hostvars[item].node_vm_image_dir }}/{{ hostvars[item].inventory_hostname_short }}.qcow2
+      loop: "{{ groups['compute'] }}"
+      register: node_vm_restorecon
+      changed_when: false
+      failed_when: false
+
+    - name: Write each VM definition
+      ansible.builtin.template:
+        src: compute-vm.xml.j2
+        dest: "/var/tmp/{{ hostvars[node].inventory_hostname_short }}.xml"
+        mode: "0644"
+      vars:
+        vm_name: "{{ hostvars[node].inventory_hostname_short }}"
+        vm_mac: "{{ hostvars[node].cobbler_mac }}"
+        vm_memory_mb: "{{ hostvars[node].node_vm_memory_mb }}"
+        vm_vcpus: "{{ hostvars[node].node_vm_vcpus }}"
+        vm_disk_path: "{{ hostvars[node].node_vm_image_dir }}/{{ hostvars[node].inventory_hostname_short }}.qcow2"
+        vm_network: "{{ hostvars[node].node_vm_libvirt_network }}"
+        vm_nic_model: "{{ hostvars[node].node_vm_nic_model }}"
+      loop: "{{ groups['compute'] }}"
+      loop_control:
+        loop_var: node
+
+    - name: Define the VMs that do not exist yet
+      ansible.builtin.command: virsh define /var/tmp/{{ hostvars[item].inventory_hostname_short }}.xml
+      when: hostvars[item].inventory_hostname_short not in node_vm_existing.stdout_lines | map('trim') | list
+      loop: "{{ groups['compute'] }}"
+
+    - name: Show the result
+      ansible.builtin.command: virsh list --all
+      register: node_vm_final
+      changed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        var: node_vm_final.stdout_lines

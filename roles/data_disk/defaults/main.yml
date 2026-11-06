@@ -1,0 +1,20 @@
+---
+# Prepares the data disk that the NFS role needs (runbook 9.1).
+# Empty device = do nothing, so inventories that prepare /data by hand
+# (vbox, supermicro) behave exactly as before.
+data_disk_device: ""
+# Refuse anything that is not a block device (set false only for testing).
+data_disk_require_block: true
+data_disk_fstype: xfs
+data_disk_label: data
+data_disk_mount: /data
+
+# Folders created on the data disk
+data_disk_dirs: [home, opt, isos]
+
+# Local users whose home must move to <mount>/home before the NFS role.
+# Each user must be logged out; the role stops if they have processes.
+data_disk_move_homes: []
+
+# Give <mount>/home the same SELinux labels as /home (logins need them)
+data_disk_selinux_home_equiv: true

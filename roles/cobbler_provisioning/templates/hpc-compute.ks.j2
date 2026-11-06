@@ -1,0 +1,140 @@
+## hpc-compute.ks -- deployed by Ansible role cobbler_provisioning. Edit the role, not this file.
+## Cobbler renders this as a Cheetah template per system:
+##   * Cobbler values are read with $getVar(...) so a profile-level render never fails.
+##   * ALL shell code is inside #raw ... #end raw so Cheetah does not touch $VARS.
+#set $node   = $getVar('system_name', '')
+#set $job    = $getVar('hpc_job', 'none')
+#set $disk   = $getVar('hpc_disk', '{{ hpc_disk }}')
+#set $fqdn   = $getVar('hostname', '')
+#if $fqdn == ''
+#set $fqdn = $node + '.{{ hpc_node_domain }}'
+#end if
+text
+skipx
+eula --agreed
+firstboot --disable
+lang en_US.UTF-8
+keyboard us
+timezone {{ hpc_timezone }} --utc
+selinux --enforcing
+firewall --enabled --service=ssh
+services --enabled=sshd,chronyd
+
+url --url=$tree
+{% if hpc_ks_minimal_repo | bool %}
+repo --name=Minimal --baseurl=$tree/Minimal
+{% endif %}
+
+## Static address from the Cobbler system record, so a node keeps its fixed IP after
+## install (Cobbler drops the DHCP host entry once netboot is off). DHCP only if unknown.
+#set $hpc_ifaces = $getVar('interfaces', {})
+#set $hpc_ip = ''
+#set $hpc_mask = ''
+#if '{{ hpc_boot_nic }}' in $hpc_ifaces
+#set $hpc_ip = $hpc_ifaces['{{ hpc_boot_nic }}'].get('ip_address', '')
+#set $hpc_mask = $hpc_ifaces['{{ hpc_boot_nic }}'].get('netmask', '')
+#end if
+#set $hpc_gw = $getVar('gateway', '')
+#set $hpc_ns = $getVar('name_servers', [])
+#if $hpc_ip and $hpc_mask
+#set $hpc_net = '--bootproto=static --ip=' + $hpc_ip + ' --netmask=' + $hpc_mask
+#if $hpc_gw
+#set $hpc_net = $hpc_net + ' --gateway=' + $hpc_gw
+#end if
+#if $hpc_ns
+#set $hpc_net = $hpc_net + ' --nameserver=' + ','.join($hpc_ns)
+#end if
+#else
+#set $hpc_net = '--bootproto=dhcp'
+#end if
+network --device={{ hpc_boot_nic }} $hpc_net --onboot=yes --noipv6 --activate --hostname=$fqdn
+
+rootpw --iscrypted $default_password_crypted
+sshkey --username=root "{{ hpc_root_pubkey }}"
+
+zerombr
+%include /tmp/hpc-disk.ks
+
+reboot
+
+## ---------------------------------------------------------------- %pre
+%pre --log=/tmp/hpc-pre.log --erroronfail
+NODE="$node"
+SERVER="$http_server"
+DISK_OVERRIDE="$disk"
+#raw
+set -x
+# tell the master the installer has started (state INSTALLING); never fatal
+[ -n "$NODE" ] && curl -fsS -m 10 -o /dev/null \
+    "http://${SERVER}/cblr/svc/op/trig/mode/pre/system/${NODE}" || true
+
+# choose the install disk: override, else first non-removable, non-USB disk
+if [ -n "$DISK_OVERRIDE" ]; then
+    DISK="$DISK_OVERRIDE"
+else
+    DISK=$(lsblk -dno NAME,TYPE,RM,TRAN | awk '$1 !~ /^(zram|loop|sr|fd|nbd|ram)/ && $2=="disk" && $3=="0" && $4!="usb" {print $1; exit}')
+fi
+[ -n "$DISK" ] && [ -b "/dev/$DISK" ] || { echo "no install disk found"; exit 1; }
+
+# remove leftovers of earlier installs (LVM, RAID, filesystem signatures)
+vgchange -an >/dev/null 2>&1 || true
+for p in $(lsblk -lnpo NAME "/dev/$DISK" | tac); do wipefs -af "$p" || true; done
+
+cat > /tmp/hpc-disk.ks <<EOF
+ignoredisk --only-use=$DISK
+clearpart --all --initlabel --drives=$DISK
+bootloader --location=mbr --boot-drive=$DISK
+reqpart
+part /boot    --fstype=xfs --size=1024 --ondisk=$DISK
+part swap     --size={{ hpc_swap_mb }} --ondisk=$DISK
+part /        --fstype=xfs --size={{ hpc_root_mb }} --ondisk=$DISK
+part /scratch --fstype=xfs --size=1 --grow --ondisk=$DISK
+EOF
+cat /tmp/hpc-disk.ks
+#end raw
+%end
+
+## ---------------------------------------------------------------- %packages
+## Keep this tiny: the minimal ISO only carries a subset of BaseOS/AppStream.
+## Everything else is installed later by Ansible (from the mirror or repo "foo").
+%packages
+{{ hpc_package_environment }}
+chrony
+curl
+python3
+tar
+%end
+
+## ---------------------------------------------------------------- %post (inside the new system)
+%post --log=/root/hpc-ks-post.log --erroronfail
+echo "$job"  > /etc/hpc-provision-job
+echo "$node" > /etc/hpc-node-name
+#raw
+set -eux
+systemctl enable sshd chronyd
+restorecon -R /root/.ssh || true
+#end raw
+%end
+
+## ---------------------------------------------------------------- %post (installer side) -- LAST
+## Runs only if everything above succeeded. Turns netboot off and tells the master.
+## If the master cannot be reached the install stops here instead of rebooting
+## into another PXE install.
+%post --nochroot --log=/mnt/sysimage/root/hpc-ks-done.log --erroronfail
+NODE="$node"
+SERVER="$http_server"
+#raw
+set -u
+[ -n "$NODE" ] || exit 0
+call() {
+    for i in $(seq 1 12); do
+        curl -fsS -m 15 -o /dev/null "$1" && return 0
+        sleep 5
+    done
+    return 1
+}
+call "http://${SERVER}/cblr/svc/op/nopxe/system/${NODE}"          || { echo "nopxe FAILED"; exit 1; }
+call "http://${SERVER}/cblr/svc/op/trig/mode/post/system/${NODE}" || { echo "post trigger FAILED"; exit 1; }
+echo "install-done callbacks OK"
+#end raw
+%end

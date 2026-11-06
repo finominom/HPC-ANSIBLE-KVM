@@ -1,0 +1,4 @@
+---
+nfs_server_host: "master.{{ cluster_domain }}"
+nfs_export_home: /data/home
+nfs_export_opt: /data/opt

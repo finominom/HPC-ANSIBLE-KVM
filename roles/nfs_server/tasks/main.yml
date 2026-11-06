@@ -1,0 +1,111 @@
+---
+- name: Install NFS and autofs
+  ansible.builtin.dnf:
+    name: [nfs-utils, autofs]
+    state: present
+
+- name: Require /data to be a separate filesystem
+  ansible.builtin.assert:
+    that: ansible_facts.mounts | selectattr('mount', 'equalto', '/data') | list | length > 0
+    fail_msg: "/data is not a separate filesystem. Mount the data disk on /data before exporting it."
+    quiet: true
+  when: nfs_require_separate_data_fs | bool
+
+- name: Create the shared home folder
+  ansible.builtin.file:
+    path: "{{ nfs_export_home }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create the shared software folder (owned by the install account)
+  ansible.builtin.file:
+    path: "{{ nfs_export_opt }}"
+    state: directory
+    owner: install
+    group: install
+    mode: "0755"
+
+- name: Create home folders under {{ nfs_export_home }}
+  ansible.builtin.file:
+    path: "{{ nfs_export_home }}/{{ item.name }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "0700"
+  loop: "{{ nfs_home_dirs }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Deploy /etc/exports
+  ansible.builtin.template:
+    src: exports.j2
+    dest: /etc/exports
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Re-export
+
+- name: Start the NFS server
+  ansible.builtin.systemd:
+    name: nfs-server
+    state: started
+    enabled: true
+
+- name: Open NFS on the internal networks
+  ansible.posix.firewalld:
+    zone: internal
+    service: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: [nfs, mountd, rpc-bind]
+
+# ---------- Master: /home/USER -> /data/home/USER ----------
+- name: Bind /home to /data/home on the master
+  when: nfs_master_autofs_home | bool
+  block:
+    - name: Check whether /home is already handled by autofs
+      ansible.builtin.stat:
+        path: /etc/auto.master.d/home.autofs
+      register: nfs_home_autofs
+
+    - name: List anything already in /home
+      ansible.builtin.find:
+        paths: /home
+        file_type: any
+        hidden: true
+      register: nfs_home_contents
+      when: not nfs_home_autofs.stat.exists
+
+    # autofs mounts over /home, which would hide these folders
+    - name: Stop if /home still holds local folders
+      ansible.builtin.assert:
+        that: nfs_home_contents.matched == 0
+        fail_msg: >-
+          /home contains {{ nfs_home_contents.files | map(attribute='path') | join(', ') }}.
+          autofs would hide them. Move each one to {{ nfs_export_home }}/ first
+          (mv /home/NAME {{ nfs_export_home }}/), or set nfs_master_autofs_home: false.
+        quiet: true
+      when: not nfs_home_autofs.stat.exists
+
+    - name: Deploy the autofs map for /home
+      ansible.builtin.copy:
+        dest: "{{ item.dest }}"
+        content: "{{ item.content }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - { dest: /etc/auto.master.d/home.autofs, content: "/home  /etc/auto.home\n" }
+        - { dest: /etc/auto.home, content: "*  -fstype=bind  :{{ nfs_export_home }}/&\n" }
+      loop_control:
+        label: "{{ item.dest }}"
+      notify: Restart autofs
+
+    - name: Start autofs
+      ansible.builtin.systemd:
+        name: autofs
+        state: started
+        enabled: true

@@ -1,0 +1,174 @@
+---
+# Install media: ISO -> /data/isos -> verified -> added to Cobbler.
+# Result: distro "{{ hpc_media_name }}-x86_64" and profile "{{ hpc_profile }}", tree copied by
+# rsync (no "cobbler import") to /var/www/cobbler/distro_mirror/, served over HTTP.
+#
+# If the distro already exists it is REUSED as it is: the ISO is not needed, and the tree
+# URL is taken from the distro (its tree= metadata, or else its kernel path).
+
+- name: Is the distro already in Cobbler?
+  ansible.builtin.command: "cobbler distro report --name={{ hpc_media_name }}-x86_64"
+  register: hpc_distro
+  changed_when: false
+  failed_when: false
+
+# ---------- existing distro: find where its tree is ----------
+- name: Read the existing distro's tree and kernel
+  when: hpc_distro.rc == 0
+  ansible.builtin.set_fact:
+    hpc_existing_tree: "{{ hpc_distro.stdout | regex_search(\"'tree': '([^']+)'\", '\\1') | default([], true) | first | default('') }}"
+    hpc_existing_kernel: "{{ hpc_distro.stdout | regex_search('(?m)^Kernel\\s*:\\s*(\\S+)', '\\1') | default([], true) | first | default('') }}"
+
+- name: Existing distro's tree is served by httpd
+  when: hpc_distro.rc == 0 and hpc_existing_tree == ''
+  ansible.builtin.assert:
+    that: hpc_existing_kernel is match('^/var/www/.*/images/pxeboot/vmlinuz$')
+    fail_msg: >-
+      Distro {{ hpc_media_name }}-x86_64 has no tree= and its kernel is {{ hpc_existing_kernel }},
+      which httpd does not serve. Remove the distro (cobbler distro remove) and re-run with the
+      ISO in {{ hpc_iso_dir }}, or set tree= by hand.
+
+- name: Use the existing distro's tree
+  when: hpc_distro.rc == 0
+  ansible.builtin.set_fact:
+    hpc_tree_url: >-
+      {{ hpc_existing_tree if hpc_existing_tree != ''
+         else 'http://' ~ hpc_master_ip ~ (hpc_existing_kernel | regex_replace('^/var/www', '') | regex_replace('/images/pxeboot/vmlinuz$', '')) }}
+
+- name: Give the existing distro a tree= (only if it has none)
+  ansible.builtin.command: >
+    cobbler distro edit --name={{ hpc_media_name }}-x86_64
+    --autoinstall-meta="tree={{ hpc_tree_url }}"
+  when: hpc_distro.rc == 0 and hpc_existing_tree == ''
+  changed_when: true
+  notify: Cobbler sync
+
+# ---------- no distro yet: ISO -> mirror -> distro ----------
+- name: Add the ISO to Cobbler
+  when: hpc_distro.rc != 0
+  block:
+    - name: ISO directory
+      ansible.builtin.file:
+        path: "{{ hpc_iso_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Download the ISO on the master and verify its SHA-256
+      when: hpc_iso_download | bool
+      ansible.builtin.get_url:
+        url: "{{ hpc_iso_url }}"
+        dest: "{{ hpc_iso_dir }}/{{ hpc_iso_file }}"
+        checksum: "sha256:{{ hpc_iso_sha256 }}"
+        mode: "0644"
+        timeout: 120
+      register: hpc_iso_dl
+      retries: 3
+      delay: 30
+      until: hpc_iso_dl is succeeded
+
+    - name: Look for the copied ISO
+      ansible.builtin.stat:
+        path: "{{ hpc_iso_dir }}/{{ hpc_iso_file }}"
+        checksum_algorithm: sha256
+      register: hpc_iso_stat
+
+    - name: The ISO is present
+      ansible.builtin.assert:
+        that: hpc_iso_stat.stat.exists
+        fail_msg: >-
+          {{ hpc_iso_dir }}/{{ hpc_iso_file }} not found on the master. Copy it first, e.g.
+          rsync --partial --progress {{ hpc_iso_file }} root@master:{{ hpc_iso_dir }}/
+          (or set hpc_iso_download: true to download on the master).
+
+    - name: The ISO is complete and genuine (SHA-256)
+      ansible.builtin.assert:
+        that: hpc_iso_stat.stat.checksum == hpc_iso_sha256
+        fail_msg: >-
+          SHA-256 mismatch for {{ hpc_iso_file }}: got {{ hpc_iso_stat.stat.checksum }},
+          expected {{ hpc_iso_sha256 }}. The copy is probably incomplete; resume it with
+          rsync --partial, then re-run.
+
+    - name: Mount point
+      ansible.builtin.file:
+        path: "{{ hpc_iso_mount }}"
+        state: directory
+        mode: "0755"
+
+    - name: Loop-mount the ISO read-only
+      ansible.builtin.command: "mount -o loop,ro {{ hpc_iso_dir }}/{{ hpc_iso_file }} {{ hpc_iso_mount }}"
+      changed_when: true
+
+    - name: The mounted ISO has the expected layout
+      ansible.builtin.stat:
+        path: "{{ hpc_iso_mount }}/{{ item }}"
+      register: hpc_iso_layout
+      failed_when: not hpc_iso_layout.stat.exists
+      loop: [.treeinfo, images/pxeboot/vmlinuz, images/pxeboot/initrd.img]
+
+    # The AlmaLinux *minimal* ISO carries a "Minimal" repo (no BaseOS/AppStream), so
+    # "cobbler import" cannot match a signature. Copy the tree and register the distro by
+    # hand, with the tree= URL the kickstart needs.
+    - name: Copy the install tree to Cobbler's mirror directory
+      ansible.builtin.command: "rsync -a {{ hpc_iso_mount }}/ {{ hpc_mirror_dir }}/"
+      changed_when: true
+
+    - name: SELinux labels on the copied tree
+      ansible.builtin.command: "restorecon -R {{ hpc_mirror_dir }}"
+      changed_when: false
+
+    - name: Register the distro (with tree= for the kickstart)
+      ansible.builtin.command: >
+        cobbler distro add --name={{ hpc_media_name }}-x86_64 --arch=x86_64
+        --breed=redhat --os-version=rhel9
+        --kernel={{ hpc_mirror_dir }}/images/pxeboot/vmlinuz
+        --initrd={{ hpc_mirror_dir }}/images/pxeboot/initrd.img
+        --autoinstall-meta="tree={{ hpc_tree_url }}"
+      changed_when: true
+      notify: Cobbler sync
+
+  always:
+    - name: Unmount the ISO
+      ansible.builtin.command: "umount {{ hpc_iso_mount }}"
+      changed_when: true
+      failed_when: false
+      when: hpc_distro.rc != 0
+
+# ---------- profile ----------
+- name: Is the profile already in Cobbler?
+  ansible.builtin.command: "cobbler profile report --name={{ hpc_profile }}"
+  register: hpc_profile_check
+  changed_when: false
+  failed_when: false
+
+- name: Create the profile
+  ansible.builtin.command: >
+    cobbler profile add --name={{ hpc_profile }} --distro={{ hpc_media_name }}-x86_64
+  when: hpc_profile_check.rc != 0
+  changed_when: true
+  notify: Cobbler sync
+
+- name: Distro and profile exist
+  ansible.builtin.command: "cobbler {{ item.kind }} report --name={{ item.name }}"
+  loop:
+    - { kind: distro,  name: "{{ hpc_media_name }}-x86_64" }
+    - { kind: profile, name: "{{ hpc_profile }}" }
+  changed_when: false
+
+# ---------- the installer can fetch the tree ----------
+- name: Local URL of the tree (Cobbler macros -> 127.0.0.1)
+  ansible.builtin.set_fact:
+    hpc_tree_check_url: >-
+      {{ hpc_tree_url | regex_replace('@@(http_server|server)@@', '127.0.0.1')
+                      | regex_replace('^http://[^/]+', 'http://127.0.0.1') }}
+
+- name: Install tree is served over HTTP
+  ansible.builtin.uri:
+    url: "{{ hpc_tree_check_url }}/.treeinfo"
+    return_content: true
+  register: hpc_treeinfo
+  failed_when: hpc_treeinfo.status != 200 or 'AlmaLinux' not in hpc_treeinfo.content
+
+- name: The repo the installer will use is served
+  ansible.builtin.uri:
+    url: "{{ hpc_tree_check_url }}/Minimal/repodata/repomd.xml"
+  when: hpc_ks_minimal_repo | bool

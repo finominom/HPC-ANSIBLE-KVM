@@ -1,0 +1,26 @@
+---
+# Cluster-wide settings - physical Supermicro cluster
+cluster_name: hpc
+cluster_domain: hpc
+mgmt_domain: mgmt
+cluster_timezone: Africa/Lagos
+
+cluster_net: 192.168.16.0/20
+cluster_netmask: 255.255.240.0
+mgmt_net: 192.168.0.0/20
+
+master_cluster_ip: 192.168.16.1
+master_mgmt_ip: 192.168.1.1
+
+# nat   = nodes reach internet repos through the master (Option B)
+# local = nodes use only the master's repos (Option A). Copy the EPEL
+#         Slurm RPMs into /var/www/html/foo first (see README).
+cluster_pkg_source: local
+
+cluster_hosts:
+  master: { hpc: 192.168.16.1, mgmt: 192.168.1.1 }
+  c01: { hpc: 192.168.17.1, mgmt: 192.168.2.1 }
+  c02: { hpc: 192.168.17.2, mgmt: 192.168.2.2 }   # confirm on the BMC
+
+cobbler_distro_name: AlmaLinux-9.8
+cobbler_arch: x86_64

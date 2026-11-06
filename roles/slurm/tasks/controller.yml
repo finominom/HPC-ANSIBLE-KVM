@@ -1,0 +1,85 @@
+---
+- name: Create the slurmctld state directory
+  ansible.builtin.file:
+    path: "{{ slurm_state_dir }}"
+    state: directory
+    owner: slurm
+    group: slurm
+    mode: "0700"
+
+- name: Accounting database and slurmdbd
+  when: slurm_enable_accounting | bool
+  block:
+    - name: MariaDB settings recommended for Slurm
+      ansible.builtin.template:
+        src: mariadb-slurm.cnf.j2
+        dest: /etc/my.cnf.d/slurm.cnf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart mariadb
+
+    - name: Start MariaDB
+      ansible.builtin.systemd:
+        name: mariadb
+        state: started
+        enabled: true
+
+    - name: Create the Slurm accounting database
+      community.mysql.mysql_db:
+        name: "{{ slurm_db_name }}"
+        state: present
+        login_unix_socket: /var/lib/mysql/mysql.sock
+
+    - name: Create the Slurm database user
+      community.mysql.mysql_user:
+        name: "{{ slurm_db_user }}"
+        password: "{{ slurm_db_pass }}"
+        host: localhost
+        priv: "{{ slurm_db_name }}.*:ALL"
+        state: present
+        login_unix_socket: /var/lib/mysql/mysql.sock
+      no_log: true
+
+    - name: Deploy slurmdbd.conf
+      ansible.builtin.template:
+        src: slurmdbd.conf.j2
+        dest: "{{ slurm_conf_dir }}/slurmdbd.conf"
+        owner: slurm
+        group: slurm
+        mode: "0600"
+      no_log: true
+      notify: Restart slurmdbd
+
+    - name: Start slurmdbd
+      ansible.builtin.systemd:
+        name: slurmdbd
+        state: started
+        enabled: true
+
+    - name: Wait for slurmdbd to listen
+      ansible.builtin.wait_for:
+        port: 6819
+        timeout: 60
+
+- name: Start slurmctld
+  ansible.builtin.systemd:
+    name: slurmctld
+    state: started
+    enabled: true
+
+- name: Register the cluster in accounting
+  when: slurm_enable_accounting | bool
+  block:
+    - name: List clusters known to slurmdbd
+      ansible.builtin.command: sacctmgr --noheader --parsable2 show cluster format=cluster
+      register: slurm_acct_clusters
+      changed_when: false
+
+    - name: Add this cluster to accounting
+      ansible.builtin.command: sacctmgr --immediate add cluster {{ slurm_cluster_name }}
+      when: slurm_cluster_name not in slurm_acct_clusters.stdout_lines
+      register: slurm_acct_add
+      changed_when: "'Nothing new added' not in slurm_acct_add.stdout and 'already exists' not in slurm_acct_add.stdout"
+      # slurmctld may register the cluster itself a moment earlier
+      failed_when: slurm_acct_add.rc != 0 and 'Nothing new added' not in slurm_acct_add.stdout and 'already exists' not in slurm_acct_add.stdout

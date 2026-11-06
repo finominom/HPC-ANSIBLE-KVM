@@ -1,0 +1,11 @@
+---
+# Pinned for ansible-core 2.14 (AlmaLinux 9 AppStream). Newer collection
+# releases need a newer ansible-core.
+# Install once: ansible-galaxy collection install -r requirements.yml
+collections:
+  - name: community.general
+    version: ">=8.2.0,<9.0.0"   # dnf_config_manager (8.2+), timezone
+  - name: community.mysql
+    version: ">=3.0.0,<4.0.0"
+  - name: ansible.posix
+    version: ">=1.5.0,<1.6.0"   # 1.6.x warns: unsupported on ansible-core 2.14

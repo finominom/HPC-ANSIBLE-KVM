@@ -1,0 +1,29 @@
+---
+base_is_master: "{{ inventory_hostname in (groups['master'] | default([])) }}"
+
+base_packages:
+  - vim
+  - tmux
+  - wget
+  - curl
+  - tar
+  - rsync
+  - bash-completion
+  - bind-utils
+  - firewalld
+  - policycoreutils-python-utils
+  - chrony
+  - git
+  - openssh-server
+  - openssh-clients
+  - nfs-utils
+  - autofs
+
+# Interface -> firewall zone. External stays public; cluster and management
+# go in the built-in "internal" zone (which allows SSH).
+base_zone_map: >-
+  {{ [ {'dev': master_if_external, 'zone': 'public'},
+       {'dev': master_if_mgmt, 'zone': 'internal'},
+       {'dev': master_if_cluster, 'zone': 'internal'} ]
+     if base_is_master | bool else
+     [ {'dev': node_if_cluster, 'zone': 'internal'} ] }}

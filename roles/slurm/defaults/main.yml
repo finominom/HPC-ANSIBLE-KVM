@@ -1,0 +1,68 @@
+---
+# ---------------------------------------------------------------------------
+# Inventory groups (must match inventory/cobbler.ini)
+# ---------------------------------------------------------------------------
+slurm_controller_group: master
+slurm_compute_group: compute
+
+# Worked out from the groups above - do not set these by hand.
+slurm_is_controller: "{{ inventory_hostname in (groups[slurm_controller_group] | default([])) }}"
+slurm_is_compute: "{{ inventory_hostname in (groups[slurm_compute_group] | default([])) }}"
+
+# Slurm compares host names with `hostname -s`, so always use SHORT names
+# (master, c01, c02), never master.hpc / c01.hpc.
+slurm_controller_host: "{{ hostvars[groups[slurm_controller_group][0]].inventory_hostname_short }}"
+
+# ---------------------------------------------------------------------------
+# Cluster
+# ---------------------------------------------------------------------------
+slurm_cluster_name: hpc
+slurm_partition_name: main
+slurm_partition_maxtime: INFINITE
+
+# Ports srun uses to talk back to the submitting host and between nodes.
+slurm_srun_port_range: "60001-63000"
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+slurm_conf_dir: /etc/slurm
+slurm_run_dir: /run/slurm
+slurm_state_dir: /var/spool/slurmctld
+slurm_spool_dir: /var/spool/slurmd
+slurm_log_dir: /var/log/slurm
+
+# ---------------------------------------------------------------------------
+# Packages
+# ---------------------------------------------------------------------------
+# EPEL is used where there is internet access: always on the master, and on
+# compute nodes when cluster_pkg_source is "nat". With "local", the Slurm
+# RPMs must already be in the master's local repo (http://192.168.16.1/foo).
+slurm_use_epel: "{{ slurm_is_controller | bool or (cluster_pkg_source | default('nat')) == 'nat' }}"
+
+# ---------------------------------------------------------------------------
+# Accounting (slurmdbd + MariaDB on the controller)
+# ---------------------------------------------------------------------------
+slurm_enable_accounting: true
+slurm_db_name: slurm_acct_db
+slurm_db_user: slurm
+slurm_db_pass: "{{ vault_slurm_db_pass }}"   # set in group_vars/master/vault.yml
+slurm_innodb_buffer_pool_size: 256M          # raise to 1G+ on the real master
+
+# ---------------------------------------------------------------------------
+# Firewall
+# ---------------------------------------------------------------------------
+slurm_manage_firewall: true
+# Zone of the interface that faces the cluster network (192.168.16.0/20).
+# On the master that is "internal" (eno3). Check compute nodes with
+# `firewall-cmd --get-active-zones` and override in group_vars/compute.yml.
+slurm_firewall_zone: internal
+
+# ---------------------------------------------------------------------------
+# Munge key
+# ---------------------------------------------------------------------------
+# One key per inventory (VirtualBox and Supermicro never share a key),
+# encrypted with ansible-vault. Create it once - see the README.
+slurm_munge_key_file: "{{ inventory_dir }}/files/munge.key"
+# Leave false so the role refuses to deploy an unencrypted key.
+slurm_allow_plain_munge_key: false

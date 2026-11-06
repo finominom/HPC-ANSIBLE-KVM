@@ -1,0 +1,34 @@
+---
+# Runs on compute nodes (from compute.yml, so also after every reinstall via hpc-node).
+# Non-destructive: installs/updates packages only, never touches /scratch or data.
+
+- name: Local repo foo
+  ansible.builtin.yum_repository:
+    name: "{{ hpc_repo_name }}"
+    description: HPC local repo on the master
+    baseurl: "{{ hpc_repo_url }}"
+    gpgcheck: "{{ hpc_repo_gpgcheck }}"
+    enabled: true
+    priority: "1"
+
+- name: Turn off network repos (nodes have no internet)
+  when: hpc_nodes_offline | bool
+  ansible.builtin.shell: |
+    for r in {{ hpc_node_network_repos | join(' ') }}; do
+      dnf repolist --enabled -q | awk '{print $1}' | grep -qx "$r" && dnf config-manager --set-disabled "$r" && echo "disabled $r"
+    done; true
+  register: hpc_repos_off
+  changed_when: "'disabled' in hpc_repos_off.stdout"
+
+- name: Install node packages from foo only
+  ansible.builtin.dnf:
+    name: "{{ hpc_compute_packages + hpc_epel_packages }}"
+    state: "{{ 'latest' if hpc_packages_latest | bool else 'present' }}"
+    disablerepo: "*"
+    enablerepo: "{{ hpc_repo_name }}"
+    update_cache: true
+
+- name: OpenMPI works
+  when: "'openmpi' in hpc_compute_packages"
+  ansible.builtin.command: /usr/lib64/openmpi/bin/mpirun --version
+  changed_when: false

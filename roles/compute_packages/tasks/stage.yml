@@ -1,0 +1,69 @@
+---
+# Runs on the master. Downloads the full dependency closure of every node package,
+# rebuilds foo's metadata, and proves foo is self-contained before any node uses it.
+
+- name: Tools for downloading and building the repo
+  ansible.builtin.dnf:
+    name: [createrepo_c, dnf-plugins-core]
+    state: present
+
+- name: EPEL for Slurm, MUNGE, Lmod (master only)
+  when: hpc_epel_packages | length > 0
+  block:
+    - name: CRB repo (EPEL packages depend on it)
+      ansible.builtin.command: dnf config-manager --set-enabled crb
+      changed_when: false
+
+    - name: epel-release
+      ansible.builtin.dnf:
+        name: epel-release
+        state: present
+
+- name: Staging directory inside foo
+  ansible.builtin.file:
+    path: "{{ hpc_repo_dir }}/{{ hpc_repo_stage_subdir }}"
+    state: directory
+    mode: "0755"
+
+# --alldeps: download every dependency, not only those missing on the MASTER.
+# Without it, anything the master already has (but a minimal node lacks) is skipped,
+# and the node install fails. Files already present are skipped, so re-runs are cheap.
+- name: Download packages with their complete dependency closure
+  ansible.builtin.command: >
+    dnf download --resolve --alldeps --arch=x86_64,noarch
+    --destdir={{ hpc_repo_dir }}/{{ hpc_repo_stage_subdir }}
+    {{ (hpc_compute_packages + hpc_epel_packages) | join(' ') }}
+  register: hpc_dl
+  changed_when: hpc_dl.stdout is search('[kM]B/s')   # a transfer line = something new was fetched
+  retries: 3
+  delay: 20
+  until: hpc_dl.rc == 0
+
+- name: Rebuild foo metadata
+  ansible.builtin.command: "createrepo_c --update {{ hpc_repo_dir }}"
+  changed_when: true
+
+- name: SELinux labels so httpd can serve foo
+  ansible.builtin.command: "restorecon -R {{ hpc_repo_dir }}"
+  changed_when: false
+
+- name: foo is self-contained (every dependency resolvable inside foo)
+  ansible.builtin.command: >
+    dnf repoclosure --refresh --repofrompath=hpcfoo-check,{{ hpc_repo_dir }}
+    --repo=hpcfoo-check --check=hpcfoo-check
+  changed_when: false
+
+- name: foo is served over HTTP
+  ansible.builtin.uri:
+    url: "{{ hpc_repo_url }}/repodata/repomd.xml"
+
+- name: Record what foo is meant to provide (for the runbook and teaching notes)
+  ansible.builtin.copy:
+    dest: "{{ hpc_repo_dir }}/PACKAGES.txt"
+    mode: "0644"
+    content: |
+      # Packages staged for compute nodes by the compute_packages role.
+      # Edit hpc_compute_packages / hpc_epel_packages in /opt/hpc-ansible, not this file.
+      {% for p in hpc_compute_packages + hpc_epel_packages %}
+      {{ p }}
+      {% endfor %}

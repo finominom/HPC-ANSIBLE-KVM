@@ -1,0 +1,87 @@
+---
+- name: Check this host belongs to a Slurm group
+  ansible.builtin.assert:
+    that: slurm_is_controller | bool or slurm_is_compute | bool
+    fail_msg: >-
+      {{ inventory_hostname }} is in neither the '{{ slurm_controller_group }}'
+      nor the '{{ slurm_compute_group }}' inventory group.
+    quiet: true
+
+- name: Check there is exactly one controller
+  ansible.builtin.assert:
+    that: (groups[slurm_controller_group] | default([]) | length) == 1
+    fail_msg: "The '{{ slurm_controller_group }}' group must contain exactly one host."
+    quiet: true
+  run_once: true
+
+- name: Check there is at least one compute node
+  ansible.builtin.assert:
+    that: (groups[slurm_compute_group] | default([]) | length) > 0
+    fail_msg: "The '{{ slurm_compute_group }}' group is empty; slurm.conf needs at least one node."
+    quiet: true
+  run_once: true
+
+- name: Check every compute node has its hardware values
+  ansible.builtin.assert:
+    that: hostvars[item].slurm_node_params is defined
+    fail_msg: >-
+      Set slurm_node_params in host_vars/{{ item }}.yml using the output of
+      'slurmd -C' on that node (see the role README).
+    quiet: true
+  loop: "{{ groups[slurm_compute_group] | default([]) }}"
+  run_once: true
+
+- name: Check the accounting password is set
+  ansible.builtin.assert:
+    that: vault_slurm_db_pass is defined and (vault_slurm_db_pass | length) >= 16
+    fail_msg: >-
+      Set vault_slurm_db_pass (16+ characters) in group_vars/master/vault.yml of
+      this inventory and encrypt that file with ansible-vault.
+    quiet: true
+  when: slurm_is_controller | bool and slurm_enable_accounting | bool
+
+- name: Look up the munge and slurm accounts
+  ansible.builtin.command: getent passwd munge slurm
+  register: slurm_accounts
+  changed_when: false
+  failed_when: false
+
+- name: Require fixed munge and slurm accounts before installing packages
+  ansible.builtin.assert:
+    that: (slurm_accounts.stdout_lines | length) == 2
+    fail_msg: >-
+      The munge and slurm users must already exist, with the same UID/GID on
+      every node, before the packages are installed (otherwise each package
+      picks its own IDs). Run the service_accounts role first.
+    quiet: true
+
+- name: Check the cluster Munge key is in the role
+  ansible.builtin.stat:
+    path: "{{ slurm_munge_key_file }}"
+  register: slurm_munge_key_stat
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Require the Munge key
+  ansible.builtin.assert:
+    that: slurm_munge_key_stat.stat.exists
+    fail_msg: "Create {{ slurm_munge_key_file }} and encrypt it with ansible-vault (see README)."
+    quiet: true
+  run_once: true
+
+- name: Check whether the Munge key file is vault-encrypted
+  ansible.builtin.command: grep -qm1 '^\$ANSIBLE_VAULT;' {{ slurm_munge_key_file }}
+  register: slurm_munge_key_vaulted
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Refuse an unencrypted Munge key
+  ansible.builtin.assert:
+    that: slurm_munge_key_vaulted.rc == 0 or slurm_allow_plain_munge_key | bool
+    fail_msg: "{{ slurm_munge_key_file }} is not vault-encrypted. Run: ansible-vault encrypt {{ slurm_munge_key_file }}"
+    quiet: true
+  run_once: true

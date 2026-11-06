@@ -1,0 +1,61 @@
+---
+# Configures compute nodes after Cobbler has installed them.
+# Prerequisites: master.yml has been run, and the offline repos exist on
+# master at http://192.168.1.1/repos/ (baseos, appstream, crb, epel-lmod).
+- name: Configure the compute nodes
+  hosts: compute
+  become: true
+
+  vars:
+    local_repo_server: "{{ master_cluster_ip }}"
+    local_repo_base_url: "http://{{ local_repo_server }}/repos"
+    local_repo_names: [baseos, appstream, crb, epel-lmod]
+    hpc_packages:
+      - openmpi
+      - openmpi-devel
+      - cmake
+      - gcc
+      - gcc-c++
+      - gcc-gfortran
+      - make
+      - Lmod
+    hpc_modulepaths:
+      - /opt/modulefiles
+      - /etc/modulefiles
+      - /usr/share/modulefiles
+
+
+
+  roles:
+    - { role: base, tags: [base] }
+    - { role: service_accounts, tags: [service_accounts] }
+    - { role: chrony, tags: [chrony] }
+    - { role: nfs_client, tags: [nfs] }
+    - { role: slurm, tags: [slurm] }
+
+  tasks:
+    - name: Install MPI, build tools and Lmod from the local repo
+      ansible.builtin.dnf:
+        name: "{{ hpc_packages }}"
+        state: present
+      tags: [hpc_software]
+
+    - name: Add module search paths for all users
+      ansible.builtin.copy:
+        dest: /etc/profile.d/zz-hpc-modulepath.sh
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          for p in {{ hpc_modulepaths | join(' ') }}; do
+            [ -d "$p" ] && export MODULEPATH="${MODULEPATH:+$MODULEPATH:}$p"
+          done
+      tags: [hpc_software]
+
+    - name: Verify the tools are installed
+      ansible.builtin.command: "{{ item }}"
+      loop:
+        - cmake --version
+        - gfortran --version
+      changed_when: false
+      tags: [hpc_software]

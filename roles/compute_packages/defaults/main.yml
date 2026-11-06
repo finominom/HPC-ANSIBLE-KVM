@@ -1,0 +1,53 @@
+---
+# compute_packages — stage node software on the master, install it on compute nodes.
+#
+#   master.yml:   - { role: compute_packages, hpc_packages_action: stage }
+#   compute.yml:  - { role: compute_packages, hpc_packages_action: install }   # before lmod/slurm roles
+#
+# The master downloads every package below WITH ALL its dependencies (dnf download
+# --resolve --alldeps) into the local repo "foo". Compute nodes are then installed
+# and updated from foo alone, so they never need internet access.
+
+hpc_packages_action: install            # stage (on master) | install (on compute nodes)
+
+# Local repo on the master (already exists: /var/www/html/foo, served over HTTP)
+hpc_repo_name: foo
+hpc_repo_dir: /var/www/html/foo
+hpc_repo_stage_subdir: staged           # downloaded RPMs go to foo/staged/
+hpc_repo_url: "http://192.168.16.1/foo"
+hpc_repo_gpgcheck: false                # foo also holds self-built RPMs (e.g. htop) that are unsigned
+
+# Everything a compute node needs. Edit this list; re-run master.yml, then compute.yml.
+hpc_compute_packages:
+  # MPI and toolchain
+  - openmpi
+  - openmpi-devel
+  - gcc
+  - gcc-c++
+  - gcc-gfortran
+  - make
+  # hardware topology / NUMA (used by OpenMPI and Slurm)
+  - hwloc
+  - numactl
+  # cluster services the other roles configure
+  - chrony
+  - nfs-utils
+  - autofs
+  - rsync
+  # local tools already in foo
+  - htop
+
+# Packages from EPEL (Slurm, MUNGE, Lmod live there on EL9). The master enables
+# EPEL + CRB only to download them; nodes still install from foo only.
+hpc_epel_packages:
+  - Lmod
+  - munge
+  - slurm
+  - slurm-slurmd
+
+# Nodes have no internet: turn off the stock network repos so dnf never hangs on them
+hpc_nodes_offline: true
+hpc_node_network_repos: [baseos, appstream, extras, crb, epel]
+
+# Keep nodes on the newest version staged in foo (false = install once, never upgrade)
+hpc_packages_latest: true

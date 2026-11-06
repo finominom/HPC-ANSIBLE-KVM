@@ -1,0 +1,6 @@
+---
+- name: Create the shared folders on the data disk
+  ansible.builtin.file:
+    path: "{{ data_disk_mount }}/{{ item }}"
+    state: directory
+  loop: "{{ data_disk_dirs }}"

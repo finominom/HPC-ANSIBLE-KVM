@@ -1,0 +1,37 @@
+---
+- name: Cobbler settings are active
+  ansible.builtin.shell: "cobbler setting report --name={{ item }} | grep -qi true"
+  loop: [pxe_just_once, run_install_triggers]
+  changed_when: false
+
+- name: Cobbler accepts every autoinstall template
+  ansible.builtin.command: cobbler validate-autoinstalls
+  changed_when: false
+
+- name: Render the kickstart for each compute system
+  ansible.builtin.uri:
+    url: "http://127.0.0.1/cblr/svc/op/autoinstall/system/{{ item }}"
+    return_content: true
+  register: hpc_rendered
+  loop: "{{ hpc_systems.stdout_lines }}"
+
+- name: Rendered kickstarts contain the callbacks and no unrendered Cheetah
+  ansible.builtin.assert:
+    that:
+      - "('NODE=' ~ item.item | to_json) in item.content"
+      - "'/cblr/svc/op/nopxe/system/${NODE}' in item.content"
+      - "'/cblr/svc/op/trig/mode/post/system/${NODE}' in item.content"
+      - "'$getVar' not in item.content"
+      - "'#raw' not in item.content"
+      - "'--hostname=' ~ item.item in item.content"
+      - "'--bootproto=static --ip=' in item.content"
+    fail_msg: "kickstart for {{ item.item }} did not render correctly"
+  loop: "{{ hpc_rendered.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: dhcpd is running (it stays down after a start-limit failure until started)
+  ansible.builtin.systemd:
+    name: dhcpd
+    state: started
+    enabled: true

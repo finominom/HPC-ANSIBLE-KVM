@@ -1,0 +1,13 @@
+---
+chrony_is_server: "{{ inventory_hostname in (groups['master'] | default([])) }}"
+
+# Upstream time for the master (reached through the external interface)
+chrony_upstream_pool: 2.almalinux.pool.ntp.org
+
+# true only if the cluster runs with no upstream time at all
+chrony_local_stratum: false
+
+# Networks allowed to sync from the master
+chrony_allow:
+  - "{{ cluster_net }}"
+  - "{{ mgmt_net }}"

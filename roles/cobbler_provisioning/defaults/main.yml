@@ -1,0 +1,135 @@
+---
+# cobbler_provisioning — defaults. Override in group_vars/master.yml if your values differ.
+
+# ---- Install media (tasks/install_media.yml) ---------------------------------
+# The ISO is copied to hpc_iso_dir by the admin (scp/rsync), checked against the
+# pinned SHA-256, and imported into Cobbler as distro + profile "<hpc_media_name>-x86_64".
+# Set hpc_iso_download: true to have the master download it itself instead.
+hpc_iso_download: false
+# When AlmaLinux 9.9 ships, 9.8 moves to https://vault.almalinux.org/9.8/isos/x86_64/
+hpc_media_version: "9.8"
+hpc_media_name: "AlmaLinux-{{ hpc_media_version }}"
+hpc_iso_dir: "/data/isos"
+hpc_iso_file: "AlmaLinux-{{ hpc_media_version }}-x86_64-minimal.iso"
+hpc_iso_url: "https://repo.almalinux.org/almalinux/{{ hpc_media_version }}/isos/x86_64/{{ hpc_iso_file }}"
+# from AlmaLinux 9.8 (20260524.0) images.json / CHECKSUM; change together with the version
+hpc_iso_sha256: "7762a4b45a66235726db145a573658964bf77bf7b9bc1c018afe86a4cf37cc2e"
+hpc_iso_mount: "/mnt/{{ hpc_media_name | lower }}"
+hpc_mirror_dir: "/var/www/cobbler/distro_mirror/{{ hpc_media_name }}-x86_64"
+
+# IP of the master on the HPC (PXE) network. Used in the distro's tree= URL, because the
+# media is added by hand (see install_media.yml), not with "cobbler import".
+hpc_master_ip: "192.168.16.1"
+hpc_tree_url: "http://{{ hpc_master_ip }}{{ hpc_mirror_dir | regex_replace('^/var/www', '') }}"
+
+# Label for the node NIC in Cobbler when the inventory gives none (node_if_cluster wins)
+hpc_cobbler_iface: "eno1"
+# Add the nodes to the master's /etc/hosts (needed for ssh by name when no DNS serves c01.hpc)
+hpc_manage_master_hosts: true
+
+# root password hash for the nodes (REQUIRED, put it in an Ansible vault):
+#   openssl passwd -6
+# It becomes Cobbler's default_password_crypted, which the kickstart uses for rootpw.
+# Without this Cobbler's shipped default applies and root's password is "cobbler".
+hpc_root_password_hash: ""
+
+# Package set. Check it exists on your ISO:
+#   grep -o '<id>minimal-environment</id>' <mounted ISO>/Minimal/repodata/*comps*.xml
+hpc_package_environment: "@core"     # the group that installed cleanly from the Minimal ISO
+# Also emit "repo --name=Minimal --baseurl=$tree/Minimal" (was in the kickstart that worked)
+hpc_ks_minimal_repo: true
+
+# ---- PXE services (tasks/install_pxe.yml): captured from the lab master's hand edits ----
+hpc_pxe_packages:
+  - cobbler
+  - dhcp-server
+  - tftp-server
+  - syslinux
+  - syslinux-nonlinux     # pxelinux.0 for legacy-BIOS PXE on EL9
+  - syslinux-tftpboot
+  - pykickstart           # cobbler validate-autoinstalls
+  - rsync
+hpc_pxe_subnet: "192.168.16.0"
+hpc_pxe_netmask: "255.255.240.0"
+hpc_pxe_range_start: "192.168.30.1"      # dynamic range for unknown MACs; registered nodes use fixed addresses
+hpc_pxe_range_end: "192.168.30.254"
+hpc_pxe_domain: "{{ hpc_node_domain }}"
+hpc_pxe_firewall_services: [dhcp, tftp, http]
+# Services are opened in the zone that holds this NIC (master's cluster NIC).
+# Empty = firewalld's default zone.
+hpc_pxe_interface: "{{ master_if_cluster | default('') }}"
+# false when nodes do NOT route through the master (no "option routers" / gateway)
+hpc_nodes_use_master_gateway: "{{ (cluster_pkg_source | default('nat')) == 'nat' }}"
+
+# ---- Compute nodes registered in Cobbler (tasks/configure_cobbler.yml) ----
+# Built from the inventory: every host in hpc_compute_group with cobbler_mac in host_vars;
+# ip from cluster_hosts[<short name>].hpc, interface from node_if_cluster.
+# Set hpc_nodes_from_inventory: false and give hpc_nodes yourself to override.
+#   hpc_nodes:
+#     - { name: c01, mac: "52:54:00:aa:bb:01", ip: "192.168.17.1", interface: enp1s0 }
+hpc_nodes_from_inventory: true
+hpc_compute_group: compute
+hpc_nodes: []
+hpc_netmask: "{{ hpc_pxe_netmask }}"
+
+# Cobbler profile the compute nodes install from (created by the import above)
+hpc_profile: "{{ hpc_media_name }}-x86_64"
+
+# Cobbler system names that are compute nodes (regex)
+hpc_nodes_regex: '^c[0-9]{2}$'
+
+# DNS suffix of a node's OS interface on the HPC network (c01 -> c01.hpc)
+hpc_node_domain: "hpc"
+
+# NIC that PXE-boots and carries the HPC network on the compute nodes
+hpc_boot_nic: "eno1"
+
+# Install disk. Empty = %pre picks the first non-USB, non-removable disk.
+# Set per node with: cobbler system edit --name=c01 --in-place --autoinstall-meta="hpc_disk=sda"
+hpc_disk: ""
+
+# Local disk layout (MiB). / and swap are fixed; /scratch takes the rest.
+hpc_root_mb: 51200
+hpc_swap_mb: 8192
+
+hpc_timezone: "UTC"
+
+# Master root key that Ansible uses to reach the nodes (created if missing)
+hpc_root_key: "/root/.ssh/id_ed25519"
+
+# Existing Ansible project
+hpc_ansible_dir: "/opt/hpc-ansible"
+# Same inventory master.yml was run with (e.g. inventory/kvm/cobbler.ini), so
+# hpc-node-configure configures nodes with the matching environment.
+hpc_inventory: "{{ ansible_inventory_sources | first }}"
+# hpc-node-configure runs unattended: if this file exists it is used as the vault password.
+hpc_vault_password_file: "/root/.vault_pass"
+hpc_compute_playbook: "compute.yml"
+hpc_validate_playbook: "validate-compute.yml"
+
+# How long to wait for a node to come back from its post-install reboot (seconds)
+hpc_ssh_wait_timeout: 2700
+
+# Does the BMC treat "chassis bootdev pxe" as ONE-SHOT (real BMCs) or permanently (VirtualBMC)?
+#  true  = send bootdev pxe before power-on (real hardware)
+#  false = do not touch the boot order; the node is PXE-first by design and Cobbler's
+#          netboot flag decides (pxelinux "localboot" falls through to the disk). Use in the VM lab.
+hpc_ipmi_set_bootdev: true
+
+# Optional: write the BMC password file used by "ipmitool -f" (put the value in a vault)
+hpc_ipmi_password: ""
+
+# IPMI: shell function body used as  ipmi <node> <ipmitool args...>
+# Replace with your /usr/bin/ipmiwrap call if that is how you reach the BMCs.
+hpc_ipmi_function: |
+  ipmi() { local node=$1; shift; ipmitool -I lanplus -H "${node}.mgmt" -U mhpc -f /root/.ipmi-mhpc "$@"; }
+
+# Checks run by validate-compute.yml (mandatory before a node is READY)
+hpc_validate_services: [sshd, chronyd]
+hpc_validate_optional_services: [autofs, munge, slurmd]   # checked only if installed
+hpc_validate_users: [install]
+hpc_validate_packages: [openmpi, openmpi-devel, hwloc]   # from the local repo foo (compute_packages role)
+hpc_validate_paths: []          # e.g. ["/data/opt"] once the NFS client role mounts it
+hpc_validate_hosts: ["master.hpc"]
+# false in an isolated lab: chrony cannot synchronise without a time source
+hpc_validate_time_sync: true

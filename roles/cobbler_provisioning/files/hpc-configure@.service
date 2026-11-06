@@ -1,0 +1,9 @@
+[Unit]
+Description=Post-install configuration of HPC compute node %i
+After=network-online.target cobblerd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/hpc-node-configure %i
+TimeoutStartSec=4h
+Environment=HOME=/root ANSIBLE_FORCE_COLOR=0

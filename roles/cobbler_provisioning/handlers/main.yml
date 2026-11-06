@@ -1,0 +1,20 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Reload firewall
+  ansible.builtin.command: firewall-cmd --reload
+
+- name: Restart cobblerd
+  ansible.builtin.systemd:
+    name: cobblerd
+    state: restarted
+
+- name: Cobbler sync
+  ansible.builtin.command: cobbler sync
+  register: hpc_sync
+  retries: 6
+  delay: 5
+  until: hpc_sync.rc == 0
+

@@ -1,0 +1,4 @@
+---
+# From `slurmd -C` on the master. Written out (not computed from facts) because
+# compute.yml runs without the master's facts and would leave raw template text.
+slurm_node_params: "CPUs=2 Boards=1 SocketsPerBoard=2 CoresPerSocket=1 ThreadsPerCore=1 RealMemory=2631"

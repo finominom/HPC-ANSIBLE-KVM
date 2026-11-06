@@ -1,0 +1,6 @@
+---
+- name: Master
+  ansible.builtin.import_playbook: master.yml
+
+- name: Compute nodes
+  ansible.builtin.import_playbook: compute.yml

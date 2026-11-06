@@ -1,0 +1,6 @@
+---
+# Copy to vault.yml in this folder, fill in, then:
+#   ansible-vault encrypt inventory/supermicro/group_vars/master/vault.yml
+# Use NEW secrets here - never reuse the VirtualBox ones.
+vault_slurm_db_pass: "CHANGE-ME"
+vault_node_root_password_hash: "$6$CHANGE-ME"

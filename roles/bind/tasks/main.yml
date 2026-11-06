@@ -1,0 +1,96 @@
+---
+- name: Check the forwarders are real IP addresses
+  ansible.builtin.assert:
+    that: bind_forwarders | reject('match', '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$') | list | length == 0
+    fail_msg: >-
+      bind_forwarders contains {{ bind_forwarders | reject('match', '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$') | join(', ') }}.
+      Put the campus DNS server addresses in group_vars/master/main.yml.
+    quiet: true
+
+- name: Install BIND
+  ansible.builtin.dnf:
+    name: [bind, bind-utils]
+    state: present
+
+- name: Deploy named.conf
+  ansible.builtin.template:
+    src: named.conf.j2
+    dest: /etc/named.conf
+    owner: root
+    group: named
+    mode: "0640"
+    backup: true
+    validate: named-checkconf %s
+  notify: Reload named
+
+- name: Deploy the forward zones
+  ansible.builtin.template:
+    src: forward.zone.j2
+    dest: /var/named/{{ item.zone }}.zone
+    owner: root
+    group: named
+    mode: "0640"
+    validate: named-checkzone {{ item.zone }} %s
+  loop: "{{ bind_forward_zones }}"
+  loop_control:
+    label: "{{ item.zone }}"
+  notify: Reload named
+
+- name: Deploy the reverse zones
+  ansible.builtin.template:
+    src: reverse.zone.j2
+    dest: /var/named/{{ item }}.rev
+    owner: root
+    group: named
+    mode: "0640"
+    validate: named-checkzone {{ item.split('.') | reverse | join('.') }}.in-addr.arpa %s
+  loop: "{{ bind_reverse_nets }}"
+  notify: Reload named
+
+- name: Start named
+  ansible.builtin.systemd:
+    name: named
+    state: started
+    enabled: true
+
+- name: Answer DNS on the internal networks
+  ansible.posix.firewalld:
+    zone: internal
+    service: dns
+    permanent: true
+    immediate: true
+    state: enabled
+
+- name: Apply zone changes before testing
+  ansible.builtin.meta: flush_handlers
+
+# ---------- STOP GATE C, checked in code ----------
+- name: Look up the master by name
+  ansible.builtin.command: dig +short @127.0.0.1 master.{{ cluster_domain }}
+  register: bind_test_fwd
+  changed_when: false
+
+- name: Look up the master by address
+  ansible.builtin.command: dig +short @127.0.0.1 -x {{ master_cluster_ip }}
+  register: bind_test_rev
+  changed_when: false
+
+- name: Check forward and reverse lookups
+  ansible.builtin.assert:
+    that:
+      - bind_test_fwd.stdout == master_cluster_ip
+      - bind_test_rev.stdout == 'master.' ~ cluster_domain ~ '.'
+    fail_msg: "DNS test failed: master.{{ cluster_domain }} -> '{{ bind_test_fwd.stdout }}', {{ master_cluster_ip }} -> '{{ bind_test_rev.stdout }}'"
+    quiet: true
+
+- name: Look up an external name through the forwarders
+  ansible.builtin.command: dig +short @127.0.0.1 almalinux.org A
+  register: bind_test_ext
+  changed_when: false
+
+- name: Warn if external names do not resolve
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: almalinux.org did not resolve. Check bind_forwarders
+      ({{ bind_forwarders | join(', ') }}), or try bind_dnssec_validation: "no".
+  when: bind_test_ext.stdout | length == 0

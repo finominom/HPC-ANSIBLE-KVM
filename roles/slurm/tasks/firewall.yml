@@ -1,0 +1,20 @@
+---
+- name: Make sure firewalld is running
+  ansible.builtin.systemd:
+    name: firewalld
+    state: started
+    enabled: true
+
+# Ports go into the cluster-facing zone only, never into "public" (eno1).
+- name: Open Slurm ports in zone {{ slurm_firewall_zone }}
+  ansible.posix.firewalld:
+    zone: "{{ slurm_firewall_zone }}"
+    port: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: >-
+    {{ (['6817/tcp'] if slurm_is_controller | bool else [])
+       + (['6819/tcp'] if (slurm_is_controller | bool and slurm_enable_accounting | bool) else [])
+       + (['6818/tcp'] if slurm_is_compute | bool else [])
+       + [slurm_srun_port_range ~ '/tcp'] }}
