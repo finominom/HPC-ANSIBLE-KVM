@@ -67,4 +67,4 @@
     name: "{{ item }}"
     state: started
     enabled: true
-  loop: [httpd, tftp.socket]
+  loop: [httpd]

@@ -65,7 +65,7 @@ if systemctl is-active -q dhcpd; then
 else warn "dhcpd not running: stop gate D not opened yet"; fi
 
 echo "== Services and firewall"
-for s in httpd tftp.socket named firewalld; do systemctl is-active -q $s && ok "$s active" || bad "$s not active"; done
+for s in httpd xcatd named firewalld; do systemctl is-active -q $s && ok "$s active" || bad "$s not active"; done
 fw=$(firewall-cmd --zone=internal --list-all 2>/dev/null)
 for s in dhcp tftp http; do echo "$fw" | grep -q "services:.*\b$s\b" && ok "firewall internal: $s" || bad "firewall internal missing $s"; done
 for p in 3001/tcp 3002/tcp; do echo "$fw" | grep -q "$p" && ok "firewall internal: $p" || bad "firewall internal missing $p"; done
