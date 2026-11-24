@@ -39,7 +39,12 @@
   loop: "{{ xo_attrs | dict2items }}"
   loop_control:
     label: "{{ item.key }}"
-  when: (xo_current[item.key] | default('') | string) != (item.value | string)
+  # lsdef shows a node's script lists merged with xcatdefaults (otherpkgs, ...),
+  # so for those only check that every script we want is in the list.
+  when: >-
+    ((item.value | string).split(',') | difference((xo_current[item.key] | default('') | string).split(',')) | length > 0)
+    if item.key in ['postscripts', 'postbootscripts'] else
+    ((xo_current[item.key] | default('') | string) != (item.value | string))
   no_log: "{{ xo_secret | default(false) }}"
 
 - name: "Create the xCAT object {{ xo_type ~ '/' ~ xo_name }}"
