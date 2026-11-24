@@ -1,0 +1,16 @@
+---
+# OpenMPI + Lmod on every cluster host (master: build and submit; nodes: run).
+hpc_mpi_packages: [openmpi, openmpi-devel, Lmod]
+
+# Cluster network MPI must use (the master has other NICs too).
+hpc_mpi_network: "{{ cluster_net }}"
+
+# mpirun's helper daemons and MPI ranks connect to each other on random TCP
+# ports, so the cluster network has to be open between cluster hosts.
+hpc_mpi_firewall_zone: internal
+hpc_mpi_trust_cluster_net: true
+
+# Written into OpenMPI's system-wide MCA parameter file
+hpc_mpi_mca_params:
+  oob_tcp_if_include: "{{ hpc_mpi_network }}"
+  btl_tcp_if_include: "{{ hpc_mpi_network }}"

@@ -1,0 +1,28 @@
+---
+- name: Install OpenMPI and Lmod
+  ansible.builtin.dnf:
+    name: "{{ hpc_mpi_packages }}"
+    state: present
+
+- name: Keep OpenMPI traffic on the cluster network
+  ansible.builtin.blockinfile:
+    path: /etc/openmpi-x86_64/openmpi-mca-params.conf
+    marker: "# {mark} ANSIBLE MANAGED (role hpc_mpi)"
+    block: |
+      {% for k, v in hpc_mpi_mca_params.items() %}
+      {{ k }} = {{ v }}
+      {% endfor %}
+    create: true
+    owner: root
+    group: root
+    mode: "0644"
+
+# Same rule as the hand test: accept everything from the cluster network on
+# the cluster-facing zone. The public zone (outside NIC) is not touched.
+- name: Let cluster hosts reach each other (MPI uses random ports)
+  ansible.posix.firewalld:
+    zone: "{{ hpc_mpi_firewall_zone }}"
+    rich_rule: "rule family=ipv4 source address={{ hpc_mpi_network }} accept"
+    permanent: true
+    immediate: true
+    state: "{{ 'enabled' if hpc_mpi_trust_cluster_net | bool else 'disabled' }}"

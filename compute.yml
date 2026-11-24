@@ -30,6 +30,7 @@
     - { role: chrony, tags: [chrony] }
     - { role: nfs_client, tags: [nfs] }
     - { role: slurm, tags: [slurm] }
+    - { role: hpc_mpi, tags: [mpi] }
     - { role: monitoring, tags: [monitoring] }
 
   tasks:

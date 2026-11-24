@@ -17,4 +17,5 @@
     - { role: xcat, tags: [xcat] }
     - { role: hpc_provisioning, tags: [provisioning] }
     - { role: slurm, tags: [slurm] }
+    - { role: hpc_mpi, tags: [mpi] }
     - { role: monitoring, tags: [monitoring] }
