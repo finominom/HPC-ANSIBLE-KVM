@@ -40,6 +40,18 @@
       register: xcat_dhcpd_dropin
       notify: Reload systemd
 
+    # dhcpd will not start without its lease file (removing an old DHCP setup,
+    # e.g. Cobbler's, can leave only dhcpd.leases~ behind)
+    - name: Make sure the dhcpd lease file exists
+      ansible.builtin.file:
+        path: /var/lib/dhcpd/dhcpd.leases
+        state: touch
+        owner: dhcpd
+        group: dhcpd
+        mode: "0644"
+        access_time: preserve
+        modification_time: preserve
+
     # makedhcp -n restarts dhcpd itself, so systemd must know the drop-in first
     - name: Apply the drop-in before makedhcp runs
       ansible.builtin.meta: flush_handlers
