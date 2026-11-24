@@ -1,0 +1,70 @@
+---
+# ---------- SELinux: permissive, not disabled ----------
+# Keeps file labels correct (so turning it back on later needs no relabel)
+# and keeps the semanage/restorecon steps of the data and nfs roles working.
+- name: Set SELinux on the master to {{ xcat_mn_selinux_state }}
+  ansible.posix.selinux:
+    policy: targeted
+    state: "{{ xcat_mn_selinux_state }}"
+  register: xcat_selinux
+  when: xcat_mn_selinux_state in ['permissive', 'enforcing']
+
+- name: Warn when a reboot is needed for SELinux
+  ansible.builtin.debug:
+    msg: >-
+      SELinux was disabled at boot. The config now says {{ xcat_mn_selinux_state }};
+      reboot the master once (snapshot first). The first boot relabels the disk.
+  when: xcat_selinux.reboot_required | default(false)
+
+# ---------- firewalld back on ----------
+- name: Start firewalld again (xcatconfig stopped and disabled it)
+  ansible.builtin.systemd:
+    name: firewalld
+    state: started
+    enabled: true
+  when: xcat_keep_firewalld | bool
+
+- name: Check the cluster NIC is still in the internal zone
+  ansible.builtin.command: firewall-cmd --get-zone-of-interface={{ master_if_cluster }}
+  register: xcat_cluster_zone
+  changed_when: false
+  failed_when: xcat_cluster_zone.stdout != 'internal'
+  when: xcat_keep_firewalld | bool
+
+- name: Open the provisioning services on the internal zone
+  ansible.posix.firewalld:
+    zone: internal
+    service: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ xcat_firewall_services }}"
+  when: xcat_keep_firewalld | bool
+
+- name: Open the xCAT ports on the internal zone
+  ansible.posix.firewalld:
+    zone: internal
+    port: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ xcat_firewall_ports }}"
+  when: xcat_keep_firewalld | bool
+
+# ---------- /etc/exports: remove the world-writable xCAT lines ----------
+- name: Remove the /install and /tftpboot exports xcatconfig added
+  ansible.builtin.lineinfile:
+    path: /etc/exports
+    regexp: '^{{ item }}\s'
+    state: absent
+  loop: [/install, /tftpboot]
+  when: xcat_remove_world_exports | bool
+  notify: Re-export
+
+# ---------- services xCAT relies on ----------
+- name: Start httpd and TFTP
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop: [httpd, tftp.socket]

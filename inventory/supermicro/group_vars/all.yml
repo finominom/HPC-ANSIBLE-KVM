@@ -22,5 +22,8 @@ cluster_hosts:
   c01: { hpc: 192.168.17.1, mgmt: 192.168.2.1 }
   c02: { hpc: 192.168.17.2, mgmt: 192.168.2.2 }   # confirm on the BMC
 
-cobbler_distro_name: AlmaLinux-9.8
-cobbler_arch: x86_64
+# OS media copied into xCAT with copycds: /install/<xcat_osver>/<xcat_arch>,
+# stock osimage <xcat_osver>-<xcat_arch>-install-compute. Must match the ISO
+# (the xcat role reads the version from the ISO and stops if it differs).
+xcat_osver: alma9.8
+xcat_arch: x86_64

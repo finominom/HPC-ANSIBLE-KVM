@@ -1,6 +1,6 @@
 ---
 # ---------------------------------------------------------------------------
-# Inventory groups (must match inventory/cobbler.ini)
+# Inventory groups (must match inventory/<name>/hosts.ini)
 # ---------------------------------------------------------------------------
 slurm_controller_group: master
 slurm_compute_group: compute

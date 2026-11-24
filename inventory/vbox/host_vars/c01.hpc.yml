@@ -5,5 +5,5 @@
 slurm_node_params: "CPUs=2 Boards=1 SocketsPerBoard=1 CoresPerSocket=2 ThreadsPerCore=1 RealMemory=1800"
 
 # MAC of the VM's network adapter (Settings > Network > Adapter 1 > Advanced).
-# Uncomment to let Cobbler create the system record.
-# cobbler_mac: "08:00:27:00:00:01"
+# Uncomment (lower-case) to have the xcat role define the node.
+# xcat_mac: "08:00:27:00:00:01"

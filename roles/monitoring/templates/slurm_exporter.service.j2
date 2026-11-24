@@ -1,0 +1,25 @@
+# {{ ansible_managed }}
+# Runs sinfo, squeue, sdiag, sshare and scontrol as an ordinary user,
+# authenticated by Munge, so it needs nothing beyond the Slurm client.
+[Unit]
+Description=Prometheus Slurm exporter
+Documentation=https://github.com/SckyzO/slurm_exporter
+Wants=network-online.target
+After=network-online.target slurmctld.service munge.service
+
+[Service]
+Type=simple
+User=prometheus
+Group=prometheus
+Environment=SLURM_CONF=/etc/slurm/slurm.conf
+ExecStart=/usr/local/bin/slurm_exporter \
+  --web.listen-address={{ monitoring_slurm_exporter_listen }}{% for a in monitoring_slurm_exporter_args %} \
+  {{ a }}{% endfor %}
+
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

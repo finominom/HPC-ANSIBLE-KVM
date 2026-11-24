@@ -1,0 +1,55 @@
+---
+# Ansible runs on the master, so "localhost" here is the master. It downloads
+# each archive once (checked against the project's published SHA-256 list)
+# and unpacks it under monitoring_dist_dir. Hosts then get the binaries with
+# `copy`, so the compute nodes never need internet access.
+- name: Pick the archives this play needs
+  ansible.builtin.set_fact:
+    monitoring_needed: >-
+      {{ ['node_exporter']
+         + ((['prometheus', 'alertmanager'] + (['slurm_exporter'] if monitoring_slurm_exporter_enabled | bool else []))
+            if (ansible_play_hosts | select('in', groups['master'] | default([])) | list | length > 0)
+            else []) }}
+  run_once: true
+
+- name: Create the download folder on the master
+  ansible.builtin.file:
+    path: "{{ monitoring_dist_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  delegate_to: localhost
+  run_once: true
+
+- name: Download the archives (SHA-256 checked)
+  ansible.builtin.get_url:
+    url: "{{ monitoring_downloads[item].url }}"
+    dest: "{{ monitoring_dist_dir }}/{{ monitoring_downloads[item].url | basename }}"
+    checksum: "sha256:{{ monitoring_downloads[item].sums }}"
+    mode: "0644"
+  loop: "{{ monitoring_needed }}"
+  delegate_to: localhost
+  run_once: true
+
+- name: Create the folders for archives without a top folder
+  ansible.builtin.file:
+    path: "{{ monitoring_dist_dir }}/{{ monitoring_downloads[item].dir }}"
+    state: directory
+    mode: "0755"
+  loop: "{{ monitoring_needed }}"
+  when: monitoring_downloads[item].flat | default(false)
+  delegate_to: localhost
+  run_once: true
+
+- name: Unpack the archives
+  ansible.builtin.unarchive:
+    src: "{{ monitoring_dist_dir }}/{{ monitoring_downloads[item].url | basename }}"
+    dest: >-
+      {{ monitoring_dist_dir ~ '/' ~ monitoring_downloads[item].dir
+         if monitoring_downloads[item].flat | default(false) else monitoring_dist_dir }}
+    remote_src: true
+    creates: "{{ monitoring_dist_dir }}/{{ monitoring_downloads[item].dir }}/{{ monitoring_downloads[item].bins[0] }}"
+  loop: "{{ monitoring_needed }}"
+  delegate_to: localhost
+  run_once: true

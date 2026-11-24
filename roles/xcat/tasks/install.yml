@@ -1,0 +1,52 @@
+---
+# Installing the xCAT package runs `xcatconfig -i` once, which:
+#   - creates the xCAT database, certificates and /root/.ssh/id_rsa
+#   - creates the shared node SSH host keys in /etc/xcat/hostkeys
+#   - fills the networks table from every NIC (makenetworks)
+#   - sets SELinux to disabled, stops and disables firewalld,
+#     turns on IP forwarding and adds /install and /tftpboot to /etc/exports
+# restore.yml puts back the firewall, SELinux and exports right after.
+- name: Add the xcat-core repository
+  ansible.builtin.yum_repository:
+    name: xcat-core
+    description: "xCAT {{ xcat_version }} Core"
+    baseurl: "{{ xcat_core_baseurl }}"
+    gpgcheck: "{{ xcat_repo_gpgcheck }}"
+    gpgkey: "{{ xcat_core_baseurl }}/repodata/repomd.xml.key"
+    enabled: true
+
+- name: Add the xcat-dep repository
+  ansible.builtin.yum_repository:
+    name: xcat-dep
+    description: "xCAT dependencies (rh{{ ansible_facts.distribution_major_version }})"
+    baseurl: "{{ xcat_dep_baseurl }}"
+    gpgcheck: "{{ xcat_repo_gpgcheck }}"
+    gpgkey: "{{ xcat_dep_baseurl }}/repodata/repomd.xml.key"
+    enabled: true
+
+- name: Install xCAT (first time this runs xcatconfig -i, a few minutes)
+  ansible.builtin.dnf:
+    name: xCAT
+    state: present
+  register: xcat_installed
+
+- name: Start xcatd
+  ansible.builtin.systemd:
+    name: xcatd
+    state: started
+    enabled: true
+
+- name: Wait for xcatd
+  ansible.builtin.wait_for:
+    port: 3001
+    timeout: 120
+
+- name: Show the xCAT version
+  ansible.builtin.command: lsxcatd -v
+  environment: "{{ xcat_env }}"
+  register: xcat_lsxcatd
+  changed_when: false
+
+- name: Report the version
+  ansible.builtin.debug:
+    msg: "{{ xcat_lsxcatd.stdout }}"

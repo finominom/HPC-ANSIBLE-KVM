@@ -1,0 +1,77 @@
+#!/bin/bash
+# {{ ansible_managed }}
+# xCAT postbootscript: runs once on each compute node at first boot, after
+# xCAT's own scripts (syslog, remoteshell, ...). Does what the Cobbler
+# Kickstart %post used to do, plus a static address:
+#   1. the cluster NIC: static {{ cluster_net }} address, DNS = the master
+#   2. chrony: sync from the master only (the chrony role takes over later)
+#   3. root SSH: add the master's ed25519 key (Ansible logs in with it)
+#   4. host name: the FQDN Ansible and DNS use (cNN.{{ cluster_domain }})
+# Log: journalctl -t hpc_bootstrap, and /var/log/xcat/xcat.log
+set -u
+TAG=hpc_bootstrap
+log() { logger -t "$TAG" "$*"; echo "$TAG: $*"; }
+
+MASTER={{ master_cluster_ip }}
+PREFIX={{ cluster_net.split('/')[1] }}
+GATEWAY="{{ xcat_node_gateway }}"
+DOMAIN={{ cluster_domain }}
+SEARCH="{{ cluster_domain }} {{ mgmt_domain }}"
+PUBKEY='{{ xcat_master_pubkey }}'
+
+NODE_SHORT="${NODE:-$(hostname -s)}"
+NODE_SHORT="${NODE_SHORT%%.*}"
+case "$NODE_SHORT" in
+{% for n in groups['compute'] | default([]) %}
+{% if hostvars[n].xcat_mac is defined %}
+  {{ hostvars[n].inventory_hostname_short }}) IP={{ cluster_hosts[hostvars[n].inventory_hostname_short].hpc }}; MAC={{ hostvars[n].xcat_mac }} ;;
+{% endif %}
+{% endfor %}
+  *) log "node $NODE_SHORT is not in the Ansible inventory, nothing to do"; exit 0 ;;
+esac
+
+# ---------- 1. static address on the NIC with this MAC ----------
+DEV=$(ip -o link | awk -v m="$MAC" 'tolower($0) ~ m {sub(":$", "", $2); print $2; exit}')
+if [ -z "$DEV" ]; then
+  log "no NIC with MAC $MAC - leaving the network as installed (DHCP)"
+else
+  CON=$(nmcli -g GENERAL.CONNECTION device show "$DEV" 2>/dev/null)
+  if [ -z "$CON" ]; then
+    nmcli connection add type ethernet ifname "$DEV" con-name cluster
+    CON=cluster
+  fi
+  if [ -n "$GATEWAY" ]; then
+    GWOPTS=(ipv4.gateway "$GATEWAY" ipv4.never-default no)
+  else
+    GWOPTS=(ipv4.gateway "" ipv4.never-default yes)
+  fi
+  nmcli connection modify "$CON" \
+    connection.id cluster connection.autoconnect yes \
+    ipv4.method manual ipv4.addresses "$IP/$PREFIX" "${GWOPTS[@]}" \
+    ipv4.dns "$MASTER" ipv4.dns-search "$SEARCH" ipv4.ignore-auto-dns yes \
+    ipv6.method disabled
+  # reapply keeps the link up (same address), so the xCAT status update
+  # that follows this script still reaches the master
+  nmcli device reapply "$DEV" || nmcli connection up cluster
+  log "$DEV ($MAC) set to $IP/$PREFIX gateway='${GATEWAY:-none}'"
+fi
+
+# ---------- 2. time from the master ----------
+sed -i -e 's/^\(pool\|server\) .*/#&/' /etc/chrony.conf
+grep -q "^server $MASTER " /etc/chrony.conf || echo "server $MASTER iburst" >> /etc/chrony.conf
+systemctl enable --now chronyd
+systemctl restart chronyd
+log "chrony now uses $MASTER"
+
+# ---------- 3. the master's root key ----------
+install -d -m 0700 /root/.ssh
+touch /root/.ssh/authorized_keys
+grep -qxF "$PUBKEY" /root/.ssh/authorized_keys || echo "$PUBKEY" >> /root/.ssh/authorized_keys
+chmod 0600 /root/.ssh/authorized_keys
+command -v restorecon >/dev/null && restorecon -R /root/.ssh /etc/ssh
+log "master key in /root/.ssh/authorized_keys"
+
+# ---------- 4. host name ----------
+hostnamectl set-hostname "$NODE_SHORT.$DOMAIN"
+log "host name $NODE_SHORT.$DOMAIN"
+exit 0

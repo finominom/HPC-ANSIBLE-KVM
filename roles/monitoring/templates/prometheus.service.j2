@@ -1,0 +1,25 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Prometheus (metrics database and alert rules)
+Documentation=https://prometheus.io/docs/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=prometheus
+Group=prometheus
+ExecStart=/usr/local/bin/prometheus \
+  --config.file=/etc/prometheus/prometheus.yml \
+  --storage.tsdb.path={{ monitoring_prometheus_data_dir }} \
+  --storage.tsdb.retention.time={{ monitoring_prometheus_retention }} \
+  --web.listen-address={{ monitoring_prometheus_listen }}
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

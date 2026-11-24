@@ -1,0 +1,48 @@
+---
+# hpc_provisioning: the "hpc-node" provisioning controller, on top of xCAT.
+# Same commands and states as the Cobbler version (cobbler_provisioning):
+#   hpc-node provision c01   reinstall + configure (compute.yml) + validate, unattended
+#   hpc-node status | log | history | configure | cancel
+# Needs the xcat role (node definitions, osimage, DHCP after stop gate D).
+
+# Existing Ansible project and how the worker runs it
+hpc_ansible_dir: /opt/hpc-ansible
+# Same inventory master.yml was run with (ansible.cfg default: inventory/kvm/hosts.ini)
+hpc_inventory: "{{ ansible_inventory_sources | first }}"
+# Unattended runs read the vault password from this file if it exists (mode 0600)
+hpc_vault_password_file: /root/.vault_pass
+hpc_compute_playbook: compute.yml
+hpc_validate_playbook: validate-compute.yml
+
+# xCAT osimage the nodes install (the xcat role creates it)
+hpc_osimage: "hpc-{{ xcat_osver }}-{{ xcat_arch }}-install-compute"
+# Folder served over HTTP; the Kickstart fetches /install/hpc-provision/jobs/<node>
+hpc_job_dir: /install/hpc-provision/jobs
+
+hpc_nodes_regex: '^c[0-9]{2}$'
+hpc_node_group: compute            # xCAT group listed by "hpc-node status"
+hpc_node_domain: "{{ cluster_domain }}"
+
+# How long to wait from power-on until the new system has booted and xCAT's
+# first-boot scripts are done (seconds)
+hpc_ssh_wait_timeout: 2700
+
+# ---- Power (IPMI) --------------------------------------------------------
+# true  = send "chassis bootdev pxe" before power-on (real BMCs: one-shot)
+# false = leave the boot order alone: the node is PXE-first and xCAT decides
+#         install or "boot from disk" (VirtualBMC in the KVM lab)
+hpc_ipmi_set_bootdev: true
+# BMC password, written to /root/.ipmi-mhpc for "ipmitool -f" (keep it in the vault)
+hpc_ipmi_password: ""
+# Shell function used as:  ipmi <node> <ipmitool args...>
+hpc_ipmi_function: |
+  ipmi() { local node=$1; shift; ipmitool -I lanplus -H "${node}.mgmt" -U mhpc -f /root/.ipmi-mhpc "$@"; }
+
+# ---- validate-compute.yml: a node is READY only if all of these pass -------
+hpc_validate_services: [sshd, chronyd]
+hpc_validate_optional_services: [autofs, munge, slurmd, node_exporter]   # checked only if installed
+hpc_validate_users: []
+hpc_validate_packages: []
+hpc_validate_paths: []
+hpc_validate_hosts: ["master.{{ cluster_domain }}"]
+hpc_validate_time_sync: true

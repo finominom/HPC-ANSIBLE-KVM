@@ -1,0 +1,61 @@
+---
+# One xCAT node per compute host that has xcat_mac in host_vars. The MAC is
+# the same value host-prep/compute-vms.yml gives the VM.
+- name: Define the compute nodes
+  ansible.builtin.include_tasks: sync_object.yml
+  vars:
+    xo_type: node
+    xo_name: "{{ hostvars[xcat_node].inventory_hostname_short }}"
+    xo_secret: "{{ xcat_use_ipmi | bool }}"
+    xo_attrs: >-
+      {{ {
+           'groups': xcat_node_groups,
+           'ip': cluster_hosts[hostvars[xcat_node].inventory_hostname_short].hpc,
+           'mac': hostvars[xcat_node].xcat_mac,
+           'arch': xcat_arch,
+           'netboot': 'xnba',
+           'installnic': 'mac',
+           'primarynic': 'mac',
+           'xcatmaster': master_cluster_ip,
+           'tftpserver': master_cluster_ip,
+           'nfsserver': master_cluster_ip,
+           'serialport': xcat_serialport,
+           'serialspeed': xcat_serialspeed,
+           'postbootscripts': xcat_bootstrap_script
+         } | combine(
+           { 'mgt': 'ipmi',
+             'bmc': cluster_hosts[hostvars[xcat_node].inventory_hostname_short].mgmt,
+             'bmcusername': xcat_bmc_username,
+             'bmcpassword': xcat_bmc_password }
+           if xcat_use_ipmi | bool else {}) }}
+  loop: "{{ xcat_nodes }}"
+  loop_control:
+    loop_var: xcat_node
+
+# ---------- SSH host keys ----------
+# xCAT gives every node the same host keys (/etc/xcat/hostkeys), so the
+# master can trust them before the nodes exist, and again after a reinstall.
+# Without this, Ansible (host_key_checking = True) stops at the first
+# compute.yml run with "Host key verification failed".
+- name: Read the node host key xCAT hands out
+  ansible.builtin.slurp:
+    src: /etc/xcat/hostkeys/ssh_host_ed25519_key.pub
+  register: xcat_node_hostkey
+
+- name: Trust the node host key on the master
+  ansible.builtin.known_hosts:
+    path: /etc/ssh/ssh_known_hosts
+    name: "{{ item }}"
+    key: >-
+      {{ item }},{{ hostvars[item].inventory_hostname_short }},{{ cluster_hosts[hostvars[item].inventory_hostname_short].hpc }}
+      {{ (xcat_node_hostkey.content | b64decode).split()[0:2] | join(' ') }}
+    state: present
+  loop: "{{ xcat_nodes }}"
+
+- name: Let every user read the system known_hosts file
+  ansible.builtin.file:
+    path: /etc/ssh/ssh_known_hosts
+    owner: root
+    group: root
+    mode: "0644"
+  when: xcat_nodes | length > 0

@@ -3,13 +3,13 @@
 # Create / destroy / rebuild a blank compute-node VM and its virtual BMC.
 #
 #   VBMC_PASS=secret ./lab-node.sh recreate 1     # wipe c01 and make a blank one
-#   VBMC_PASS=secret ./lab-node.sh pxe 1          # power off/on (node installs if Cobbler netboot is on)
+#   VBMC_PASS=secret ./lab-node.sh pxe 1          # power off/on (node installs if 'nodeset c01 osimage=...' was run)
 #   VBMC_PASS=secret ./lab-node.sh bmctest 1      # does 'bootdev pxe' stick? (grey area test)
 #   ./lab-node.sh status 1
 set -euo pipefail
 
 HPC_NET=${HPC_NET:-hpc}                       # libvirt network master's internal NIC is on (NO DHCP)
-MAC_PREFIX=${MAC_PREFIX:-52:54:00:aa:bb}      # c01 -> 52:54:00:aa:bb:01 (matches your Cobbler record)
+MAC_PREFIX=${MAC_PREFIX:-52:54:00:aa:bb}      # c01 -> 52:54:00:aa:bb:01 (matches xcat_mac in host_vars)
 VBMC_ADDR=${VBMC_ADDR:-192.168.0.254}         # host IP on a network the master can reach
 VBMC_USER=${VBMC_USER:-mhpc}
 VBMC_PASS=${VBMC_PASS:-}
@@ -20,7 +20,7 @@ RAM_MB=${RAM_MB:-4096}
 VCPUS=${VCPUS:-2}
 OSINFO=${OSINFO:-almalinux9}                  # fall back to rhel9.0 if unknown
 NIC_MODEL=${NIC_MODEL:-virtio}
-BOOT_ORDER=${BOOT_ORDER:-network,hd}         # PXE first: Cobbler's netboot flag decides; pxelinux 'localboot' falls through to the disk
+BOOT_ORDER=${BOOT_ORDER:-network,hd}         # PXE first: xCAT answers install or 'boot from disk' (xNBA exit falls through to the disk)
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
@@ -52,7 +52,7 @@ do_create() {
   virsh dominfo "$NODE" >/dev/null 2>&1 && die "$NODE already exists (use recreate)"
   virsh net-info "$HPC_NET" >/dev/null 2>&1 || die "libvirt network '$HPC_NET' not found (virsh net-list --all)"
   if virsh net-dumpxml "$HPC_NET" | grep -q '<dhcp>'; then
-    die "network $HPC_NET runs DHCP -- it would answer PXE before Cobbler"
+    die "network $HPC_NET runs DHCP -- it would answer PXE before xCAT"
   fi
   ip -4 addr | grep -q "inet $VBMC_ADDR/" || echo "WARN: $VBMC_ADDR is not on this host; the master cannot reach the BMC"
 
@@ -70,7 +70,7 @@ do_create() {
       --username "$VBMC_USER" --password "${VBMC_PASS:?set VBMC_PASS}"
   vbmc start "$NODE"
   echo "== $NODE defined, powered off. BMC: $VBMC_ADDR:$PORT"
-  echo "   boot it with:  $0 pxe $N     (or hpc-node provision $NODE on the master)"
+  echo "   install it with:  hpc-node provision $NODE   (on the master)"
 }
 
 case $cmd in
@@ -85,7 +85,7 @@ case $cmd in
     ;;
   pxe)
     # VirtualBMC rejects "power cycle" and applies boot-order changes only on a full off/on.
-    # The VM is PXE-first, so no bootdev is needed; Cobbler's netboot flag decides.
+    # The VM is PXE-first, so no bootdev is needed; xCAT's nodeset state decides.
     if ipmi chassis power status | grep -q 'is on'; then
       ipmi chassis power off
       for _ in $(seq 1 30); do ipmi chassis power status | grep -q 'is off' && break; sleep 2; done

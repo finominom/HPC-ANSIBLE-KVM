@@ -1,0 +1,22 @@
+---
+- name: Preflight checks
+  ansible.builtin.import_tasks: preflight.yml
+  tags: [monitoring]
+
+- name: Download and unpack the binaries on the master (cached)
+  ansible.builtin.import_tasks: download.yml
+  tags: [monitoring]
+
+- name: Node exporter on every host
+  ansible.builtin.import_tasks: node_exporter.yml
+  tags: [monitoring, node_exporter]
+
+- name: Prometheus, Alertmanager and slurm_exporter on the master
+  ansible.builtin.import_tasks: server.yml
+  when: monitoring_is_server | bool
+  tags: [monitoring, prometheus]
+
+- name: Grafana on the master
+  ansible.builtin.import_tasks: grafana.yml
+  when: monitoring_is_server | bool
+  tags: [monitoring, grafana]

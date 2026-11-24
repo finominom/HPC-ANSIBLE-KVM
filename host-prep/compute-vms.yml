@@ -1,12 +1,13 @@
 ---
-# Run on the KVM HOST (the laptop), not inside the master VM:
-#   sudo ansible-playbook -i inventory/kvm/cobbler.ini host-prep/compute-vms.yml
+# Run on the KVM HOST (Ubuntu or AlmaLinux), not inside the master VM:
+#   sudo ansible-playbook -i inventory/kvm/hosts.ini host-prep/compute-vms.yml
 #
 # Defines one libvirt VM per host in the 'compute' inventory group, using the
-# same cobbler_mac that the cobbler role gives Cobbler, so the two always match.
-# The VMs are defined but NOT started: start them only after the cobbler role
-# has run and Stop Gate D has passed (see KVM-NOTES.md).
-# Safe to run again: existing disks and VMs are left alone.
+# same xcat_mac that the xcat role gives the xCAT node, so the two always match.
+# The VMs are defined but NOT started: start them only after the xcat role
+# has run, Stop Gate D has passed and `nodeset` was run for the node
+# (see KVM-NOTES.md). Safe to run again: existing disks and VMs are left alone.
+# Needs only ansible-core on the host (no collections).
 - name: Define the compute node VMs
   hosts: localhost
   connection: local
@@ -24,10 +25,10 @@
     - name: Check every node has a usable MAC address
       ansible.builtin.assert:
         that: >-
-          hostvars[item].cobbler_mac is defined and
-          hostvars[item].cobbler_mac is match('^([0-9a-f]{2}:){5}[0-9a-f]{2}$')
+          hostvars[item].xcat_mac is defined and
+          hostvars[item].xcat_mac is match('^([0-9a-f]{2}:){5}[0-9a-f]{2}$')
         fail_msg: >-
-          Set cobbler_mac in host_vars/{{ item }}.yml (lower-case, colons,
+          Set xcat_mac in host_vars/{{ item }}.yml (lower-case, colons,
           for example 52:54:00:aa:bb:01).
         quiet: true
       loop: "{{ groups['compute'] }}"
@@ -35,7 +36,7 @@
     - name: Check the node MAC addresses are all different
       ansible.builtin.assert:
         that: >-
-          (groups['compute'] | map('extract', hostvars, 'cobbler_mac') | list | unique | length)
+          (groups['compute'] | map('extract', hostvars, 'xcat_mac') | list | unique | length)
           == (groups['compute'] | length)
         fail_msg: Two nodes share a MAC address.
         quiet: true
@@ -62,6 +63,8 @@
         creates: "{{ hostvars[item].node_vm_image_dir }}/{{ hostvars[item].inventory_hostname_short }}.qcow2"
       loop: "{{ groups['compute'] }}"
 
+    # SELinux hosts (AlmaLinux) only; on Ubuntu, AppArmor's virt-aa-helper
+    # allows each VM's own disk paths and restorecon is simply absent.
     - name: Give the disk images the label QEMU needs
       ansible.builtin.command: restorecon -v {{ hostvars[item].node_vm_image_dir }}/{{ hostvars[item].inventory_hostname_short }}.qcow2
       loop: "{{ groups['compute'] }}"
@@ -76,7 +79,7 @@
         mode: "0644"
       vars:
         vm_name: "{{ hostvars[node].inventory_hostname_short }}"
-        vm_mac: "{{ hostvars[node].cobbler_mac }}"
+        vm_mac: "{{ hostvars[node].xcat_mac }}"
         vm_memory_mb: "{{ hostvars[node].node_vm_memory_mb }}"
         vm_vcpus: "{{ hostvars[node].node_vm_vcpus }}"
         vm_disk_path: "{{ hostvars[node].node_vm_image_dir }}/{{ hostvars[node].inventory_hostname_short }}.qcow2"
@@ -89,6 +92,7 @@
     - name: Define the VMs that do not exist yet
       ansible.builtin.command: virsh define /var/tmp/{{ hostvars[item].inventory_hostname_short }}.xml
       when: hostvars[item].inventory_hostname_short not in node_vm_existing.stdout_lines | map('trim') | list
+      changed_when: true
       loop: "{{ groups['compute'] }}"
 
     - name: Show the result

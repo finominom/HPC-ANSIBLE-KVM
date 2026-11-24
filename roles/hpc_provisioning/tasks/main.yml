@@ -1,0 +1,102 @@
+---
+- name: Packages the controller uses
+  ansible.builtin.dnf:
+    name: [ipmitool, curl, util-linux, openssh-clients]
+    state: present
+
+- name: State, log, library and job folders
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ hpc_ansible_dir }}/provisioning/state/nodes", mode: "0750" }
+    - { path: "{{ hpc_ansible_dir }}/provisioning/logs", mode: "0750" }
+    - { path: /usr/local/lib/hpc-provision, mode: "0755" }
+    - { path: "{{ hpc_job_dir }}", mode: "0755" }    # read by the nodes over HTTP
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: BMC password file for ipmitool -f
+  ansible.builtin.copy:
+    content: "{{ hpc_ipmi_password }}\n"
+    dest: /root/.ipmi-mhpc
+    owner: root
+    group: root
+    mode: "0600"
+  when: hpc_ipmi_password | length > 0
+  no_log: true
+
+- name: Configuration file
+  ansible.builtin.template:
+    src: hpc-provision.conf.j2
+    dest: /etc/hpc-provision.conf
+    owner: root
+    group: root
+    mode: "0640"
+
+- name: Shared shell library
+  ansible.builtin.copy:
+    src: hpc-provision-lib.sh
+    dest: /usr/local/lib/hpc-provision/lib.sh
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Commands
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/usr/local/sbin/{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop: [hpc-node, hpc-node-configure]
+
+- name: Per-node worker unit
+  ansible.builtin.copy:
+    src: hpc-configure@.service
+    dest: /etc/systemd/system/hpc-configure@.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Validation playbook in the Ansible project
+  ansible.builtin.template:
+    src: validate-compute.yml.j2
+    dest: "{{ hpc_ansible_dir }}/{{ hpc_validate_playbook }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+# ---------- remove the Cobbler-era pieces ----------
+# xCAT's install status replaces the Cobbler trigger -> queue -> dispatcher chain.
+- name: Stop the Cobbler event watcher if it is still there
+  ansible.builtin.systemd:
+    name: hpc-provision.path
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Remove the Cobbler-era watcher, dispatcher and queue
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/hpc-provision.path
+    - /etc/systemd/system/hpc-provision.service
+    - /etc/systemd/system/multi-user.target.wants/hpc-provision.path
+    - /usr/local/sbin/hpc-provision-dispatch
+    - /var/lib/cobbler/hpc-queue
+  notify: Reload systemd
+
+- name: Check the controller loads its configuration
+  ansible.builtin.command: /usr/local/sbin/hpc-node status
+  changed_when: false
+  register: hpc_status
+
+- name: Show the node states
+  ansible.builtin.debug:
+    var: hpc_status.stdout_lines

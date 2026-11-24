@@ -1,6 +1,6 @@
 ---
-# Master NICs inside the KVM/libvirt VM (alma98).
-# Confirmed against the MAC addresses in `virsh domiflist alma98`:
+# Master NICs inside the KVM/libvirt VM ("master" in virsh).
+# Confirmed against the MAC addresses in `virsh domiflist master`:
 #   enp1s0 = libvirt network "default" (NAT, external)
 #   enp7s0 = libvirt network "mgmt"    (isolated, no DHCP)
 #   enp8s0 = libvirt network "hpc"     (isolated, no DHCP)
@@ -22,10 +22,7 @@ nfs_require_separate_data_fs: true
 # The VM has about 4-6 GB of RAM
 slurm_innodb_buffer_pool_size: 256M
 
-# Copy the DVD ISO here first (see KVM-NOTES.md)
-cobbler_iso_path: /data/isos/AlmaLinux-9-latest-x86_64-dvd.iso
-# Keep false until STOP GATE D in the runbook has passed.
-cobbler_run_sync: false
+# xCAT and hpc-node settings: group_vars/master/provisioning.yml
 
 # Data disk: formatted, mounted on /data and filled by the data_disk role.
 # Attach it first on the KVM host with host-prep/attach-data-disk.sh.
@@ -33,7 +30,3 @@ data_disk_device: /dev/vdb
 # Move these local homes to /data/home (users must be logged out; use a
 # console login as root). Remove the list if the master has no local user.
 data_disk_move_homes: []
-
-# Use the distro already imported into Cobbler (from the minimal ISO).
-# Profile name becomes AlmaLinux-9-minimal-x86_64.
-cobbler_distro_name: AlmaLinux-9-minimal

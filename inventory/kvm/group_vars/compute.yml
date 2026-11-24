@@ -2,10 +2,9 @@
 # Compute VMs: one NIC on the libvirt network "hpc", model e1000.
 # (Legacy BIOS PXE needs a NIC with a PXE boot ROM in QEMU: e1000 or virtio.
 # e1000 matches the runbook's "Intel PRO/1000".)
-# The interface name is for the Kickstart network line. Nodes use the same
-# machine type as the master, so the first NIC should be enp1s0. After c01 is
-# installed, confirm with `ip -br link`; if it differs, fix it here and re-add
-# the Cobbler system record.
+# The interface name is used by the base role (firewall zone). xCAT and the
+# first-boot script find the NIC by its MAC, so another name does not break
+# the install. Confirm with `ip -br link` on an installed node.
 node_if_cluster: enp1s0
 
 # Used by host-prep/compute-vms.yml (run on the KVM host)

@@ -1,0 +1,159 @@
+---
+# ---------- users and folders ----------
+- name: Create the prometheus and alertmanager system users
+  ansible.builtin.user:
+    name: "{{ item }}"
+    system: true
+    shell: /sbin/nologin
+    home: "/var/lib/{{ item }}"
+    create_home: false
+    comment: "Prometheus {{ item }}"
+  loop: [prometheus, alertmanager]
+
+- name: Create the configuration and data folders
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.owner }}"
+    mode: "0755"
+  loop:
+    - { path: /etc/prometheus, owner: root }
+    - { path: /etc/prometheus/rules, owner: root }
+    - { path: "{{ monitoring_prometheus_data_dir }}", owner: prometheus }
+    - { path: /etc/alertmanager, owner: root }
+    - { path: /var/lib/alertmanager, owner: alertmanager }
+  loop_control:
+    label: "{{ item.path }}"
+
+# ---------- binaries ----------
+- name: Install the Prometheus, Alertmanager and Slurm exporter binaries
+  ansible.builtin.copy:
+    src: "{{ monitoring_dist_dir }}/{{ monitoring_downloads[item.svc].dir }}/{{ item.bin }}"
+    dest: "/usr/local/bin/{{ item.bin }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - { svc: prometheus, bin: prometheus }
+    - { svc: prometheus, bin: promtool }
+    - { svc: alertmanager, bin: alertmanager }
+    - { svc: alertmanager, bin: amtool }
+    - { svc: slurm_exporter, bin: slurm_exporter }
+  loop_control:
+    label: "{{ item.bin }}"
+  when: item.svc != 'slurm_exporter' or monitoring_slurm_exporter_enabled | bool
+  register: monitoring_server_bins
+
+- name: Restore the SELinux labels of the binaries
+  ansible.builtin.command: restorecon -Rv /usr/local/bin
+  register: monitoring_srv_label
+  changed_when: monitoring_srv_label.stdout | length > 0
+  when: ansible_facts.selinux.status | default('disabled') == 'enabled'
+
+# ---------- rules ----------
+- name: Deploy the cluster alert rules
+  ansible.builtin.copy:
+    src: hpc-alerts.yml
+    dest: /etc/prometheus/rules/hpc-alerts.yml
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/local/bin/promtool check rules %s
+  notify: Reload prometheus
+
+- name: Fetch the Slurm exporter's alert and recording rules (pinned version)
+  ansible.builtin.get_url:
+    url: "{{ monitoring_slurm_rules_base }}/{{ item.src }}"
+    dest: "/etc/prometheus/rules/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - { src: alerts.yml, dest: slurm-alerts.yml }
+    - { src: rules.yml, dest: slurm-rules.yml }
+  loop_control:
+    label: "{{ item.dest }}"
+  when: monitoring_slurm_exporter_enabled | bool
+  notify: Reload prometheus
+
+- name: Check the Slurm rules
+  ansible.builtin.command: /usr/local/bin/promtool check rules /etc/prometheus/rules/slurm-alerts.yml /etc/prometheus/rules/slurm-rules.yml
+  changed_when: false
+  when: monitoring_slurm_exporter_enabled | bool
+
+# ---------- configuration ----------
+- name: Deploy prometheus.yml
+  ansible.builtin.template:
+    src: prometheus.yml.j2
+    dest: /etc/prometheus/prometheus.yml
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/local/bin/promtool check config --syntax-only %s
+  notify: Reload prometheus
+
+- name: Deploy alertmanager.yml (contains the SMTP password)
+  ansible.builtin.template:
+    src: alertmanager.yml.j2
+    dest: /etc/alertmanager/alertmanager.yml
+    owner: root
+    group: alertmanager
+    mode: "0640"
+    validate: /usr/local/bin/amtool check-config %s
+  no_log: true
+  notify: Reload alertmanager
+
+# ---------- services ----------
+- name: Deploy the service units
+  ansible.builtin.template:
+    src: "{{ item }}.service.j2"
+    dest: "/etc/systemd/system/{{ item }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ ['prometheus', 'alertmanager'] + (['slurm_exporter'] if monitoring_slurm_exporter_enabled | bool else []) }}"
+  register: monitoring_units
+
+- name: Reload systemd after unit changes
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: monitoring_units is changed  # noqa: no-handler (units must be known before the restart below)
+
+- name: Start Prometheus, Alertmanager and the Slurm exporter (restart when changed)
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: >-
+      {{ 'restarted'
+         if (monitoring_units.results | selectattr('item', 'equalto', item) | map(attribute='changed') | first)
+            or (monitoring_server_bins.results | selectattr('changed', 'defined') | selectattr('changed')
+                | map(attribute='item.svc') | select('equalto', item) | list | length > 0)
+         else 'started' }}
+    enabled: true
+  loop: "{{ ['prometheus', 'alertmanager'] + (['slurm_exporter'] if monitoring_slurm_exporter_enabled | bool else []) }}"
+
+- name: Wait for Prometheus to answer
+  ansible.builtin.uri:
+    url: "http://{{ monitoring_prometheus_listen }}/-/ready"
+    status_code: 200
+  register: monitoring_prom_ready
+  retries: 12
+  delay: 5
+  until: monitoring_prom_ready.status == 200
+
+- name: Apply any pending reload before checking targets
+  ansible.builtin.meta: flush_handlers
+
+- name: Read the scrape targets
+  ansible.builtin.uri:
+    url: "http://{{ monitoring_prometheus_listen }}/api/v1/targets?state=active"
+    return_content: true
+  register: monitoring_targets
+
+- name: Show the target health (down is normal for a node not installed yet)
+  ansible.builtin.debug:
+    msg: >-
+      {{ monitoring_targets.json.data.activeTargets | map(attribute='labels.job')
+         | zip(monitoring_targets.json.data.activeTargets | map(attribute='labels.instance'),
+               monitoring_targets.json.data.activeTargets | map(attribute='health'))
+         | map('join', ' ') | list }}

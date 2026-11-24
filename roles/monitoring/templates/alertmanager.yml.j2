@@ -1,0 +1,31 @@
+# {{ ansible_managed }}
+{% if monitoring_alert_email_to | length > 0 %}
+global:
+  smtp_smarthost: "{{ monitoring_smtp_smarthost }}"
+  smtp_from: "{{ monitoring_smtp_from }}"
+  smtp_auth_username: "{{ monitoring_smtp_username }}"
+  smtp_auth_password: "{{ monitoring_smtp_password }}"
+  smtp_require_tls: true
+{% endif %}
+
+route:
+  receiver: {{ 'email' if monitoring_alert_email_to | length > 0 else 'none' }}
+  group_by: [alertname, instance]
+  group_wait: 1m
+  group_interval: 10m
+  repeat_interval: 12h
+
+receivers:
+  - name: none
+{% if monitoring_alert_email_to | length > 0 %}
+  - name: email
+    email_configs:
+      - to: "{{ monitoring_alert_email_to }}"
+        send_resolved: true
+{% endif %}
+
+# A down node also makes its other alerts fire: show only the root cause.
+inhibit_rules:
+  - source_matchers: [alertname = HostDown]
+    target_matchers: [severity = warning]
+    equal: [instance]

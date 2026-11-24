@@ -1,0 +1,19 @@
+# /etc/hpc-provision.conf -- {{ ansible_managed }} (role hpc_provisioning).
+# Sourced by hpc-node and hpc-node-configure.
+ANSIBLE_DIR="{{ hpc_ansible_dir }}"
+INVENTORY="{{ hpc_inventory }}"
+COMPUTE_PLAYBOOK="{{ hpc_compute_playbook }}"
+VALIDATE_PLAYBOOK="{{ hpc_validate_playbook }}"
+STATE_DIR="{{ hpc_ansible_dir }}/provisioning/state/nodes"
+LOG_DIR="{{ hpc_ansible_dir }}/provisioning/logs"
+JOB_DIR="{{ hpc_job_dir }}"
+OSIMAGE="{{ hpc_osimage }}"
+NODE_GROUP="{{ hpc_node_group }}"
+NODE_DOMAIN="{{ hpc_node_domain }}"
+NODES_REGEX='{{ hpc_nodes_regex }}'
+SSH_WAIT_TIMEOUT={{ hpc_ssh_wait_timeout }}
+# vault password for unattended ansible-playbook runs (used only if the file exists)
+VAULT_PASSWORD_FILE="{{ hpc_vault_password_file }}"
+IPMI_SET_BOOTDEV={{ 1 if hpc_ipmi_set_bootdev | bool else 0 }}
+
+{{ hpc_ipmi_function }}

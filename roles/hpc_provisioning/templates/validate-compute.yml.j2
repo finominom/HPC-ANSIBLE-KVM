@@ -1,0 +1,59 @@
+---
+# validate-compute.yml -- managed by Ansible role hpc_provisioning.
+# A node is marked READY only if every task here passes.
+- name: Validate HPC compute nodes
+  hosts: all
+  gather_facts: false
+  vars:
+    required_services: {{ hpc_validate_services | to_json }}
+    optional_services: {{ hpc_validate_optional_services | to_json }}
+    required_users: {{ hpc_validate_users | to_json }}
+    required_packages: {{ hpc_validate_packages | to_json }}
+    required_paths: {{ hpc_validate_paths | to_json }}
+    required_hosts: {{ hpc_validate_hosts | to_json }}
+  tasks:
+    - name: Collect service state
+      ansible.builtin.service_facts:
+
+    - name: Mandatory services are running
+      ansible.builtin.assert:
+        that:
+          - (item ~ '.service') in ansible_facts.services
+          - ansible_facts.services[item ~ '.service'].state == 'running'
+        fail_msg: "{{ '{{' }} item {{ '}}' }} is not running"
+      loop: "{{ '{{' }} required_services {{ '}}' }}"
+
+    - name: Optional services run when installed
+      ansible.builtin.assert:
+        that: ansible_facts.services[item ~ '.service'].state == 'running'
+        fail_msg: "{{ '{{' }} item {{ '}}' }} is installed but not running"
+      loop: "{{ '{{' }} optional_services {{ '}}' }}"
+      when: (item ~ '.service') in ansible_facts.services
+
+{% if hpc_validate_time_sync | bool %}
+    - name: Time is synchronised
+      ansible.builtin.command: chronyc -n tracking
+      register: chrony
+      changed_when: false
+      failed_when: "'Normal' not in chrony.stdout"
+{% endif %}
+
+    - name: Names resolve through DNS
+      ansible.builtin.command: "getent hosts {{ '{{' }} item {{ '}}' }}"
+      loop: "{{ '{{' }} required_hosts {{ '}}' }}"
+      changed_when: false
+
+    - name: Cluster accounts exist
+      ansible.builtin.command: "getent passwd {{ '{{' }} item {{ '}}' }}"
+      loop: "{{ '{{' }} required_users {{ '}}' }}"
+      changed_when: false
+
+    - name: Node software from the local repo is installed
+      ansible.builtin.command: "rpm -q {{ '{{' }} item {{ '}}' }}"
+      loop: "{{ '{{' }} required_packages {{ '}}' }}"
+      changed_when: false
+
+    - name: Shared paths are reachable
+      ansible.builtin.command: "test -d {{ '{{' }} item {{ '}}' }}"
+      loop: "{{ '{{' }} required_paths {{ '}}' }}"
+      changed_when: false

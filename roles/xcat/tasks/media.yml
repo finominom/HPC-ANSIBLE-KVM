@@ -1,0 +1,120 @@
+---
+# copycds copies the ISO into /install/<osver>/<arch> and creates the stock
+# osimages (<osver>-<arch>-install-compute, ...). It also writes the yum
+# repository file the installed nodes get, pointing at the master's copy
+# of BaseOS and AppStream. Runs once: skipped when the stock osimage exists.
+- name: Check whether the media is already in xCAT
+  ansible.builtin.command:
+    argv: [lsdef, -t, osimage, -o, "{{ xcat_stock_osimage }}"]
+  environment: "{{ xcat_env }}"
+  register: xcat_stock
+  changed_when: false
+  failed_when: false
+
+- name: Copy the media (first run only)
+  when: xcat_stock.rc != 0
+  block:
+    - name: Look for the ISO
+      ansible.builtin.stat:
+        path: "{{ xcat_iso_path }}"
+      register: xcat_iso
+
+    - name: Stop if the ISO is missing
+      ansible.builtin.assert:
+        that: xcat_iso.stat.exists
+        fail_msg: >-
+          {{ xcat_iso_path }} not found. Copy the AlmaLinux ISO there (from
+          the KVM host with scp), check it against CHECKSUM, and run again.
+        quiet: true
+
+    - name: Check the ISO against its SHA-256
+      ansible.builtin.stat:
+        path: "{{ xcat_iso_path }}"
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: xcat_iso_sum
+      when: xcat_iso_sha256 | length > 0
+
+    - name: Stop if the ISO is damaged or a different release
+      ansible.builtin.assert:
+        that: xcat_iso_sum.stat.checksum == xcat_iso_sha256
+        fail_msg: >-
+          SHA-256 of {{ xcat_iso_path }} is {{ xcat_iso_sum.stat.checksum }},
+          expected {{ xcat_iso_sha256 }}. Copy it again, or update xcat_iso_sha256.
+        quiet: true
+      when: xcat_iso_sha256 | length > 0
+
+    - name: Measure the free space for {{ xcat_installdir }}
+      ansible.builtin.command: df -P -B1 --output=avail {{ xcat_installdir | dirname }}
+      register: xcat_df
+      changed_when: false
+
+    - name: Stop if the ISO will not fit
+      ansible.builtin.assert:
+        that: (xcat_df.stdout_lines[-1] | int) > (xcat_iso.stat.size + xcat_install_headroom_bytes)
+        fail_msg: >-
+          {{ xcat_installdir }} needs about {{ ((xcat_iso.stat.size + xcat_install_headroom_bytes) / 1073741824) | round(1) }} GB,
+          {{ ((xcat_df.stdout_lines[-1] | int) / 1073741824) | round(1) }} GB is free.
+        quiet: true
+
+    - name: Create the mount point
+      ansible.builtin.file:
+        path: "{{ xcat_iso_mount }}"
+        state: directory
+        mode: "0755"
+
+    # The "9-latest" ISO name says nothing about the minor version, so read
+    # it from the media and compare it with xcat_osver.
+    - name: Read the version on the ISO
+      block:
+        - name: Mount the ISO  # noqa: command-instead-of-module (temporary, unmounted below)
+          ansible.builtin.command: mount -o loop,ro {{ xcat_iso_path }} {{ xcat_iso_mount }}
+          changed_when: false
+
+        - name: Read .discinfo
+          ansible.builtin.slurp:
+            src: "{{ xcat_iso_mount }}/.discinfo"
+          register: xcat_discinfo
+      always:
+        - name: Unmount the ISO
+          ansible.builtin.command: umount {{ xcat_iso_mount }}
+          changed_when: false
+          failed_when: false
+
+    - name: Check the ISO is the release in xcat_osver
+      ansible.builtin.assert:
+        that: >-
+          (xcat_discinfo.content | b64decode).splitlines()[1] | trim
+          == 'AlmaLinux ' ~ (xcat_osver | regex_replace('^alma', ''))
+        fail_msg: >-
+          The ISO is '{{ (xcat_discinfo.content | b64decode).splitlines()[1] | trim }}', but
+          xcat_osver is {{ xcat_osver }}. Use the matching ISO, or change
+          xcat_osver in group_vars/all.yml.
+        quiet: true
+
+    - name: Run copycds (several minutes)
+      ansible.builtin.command:
+        argv: [copycds, -n, "{{ xcat_osver }}", -a, "{{ xcat_arch }}", "{{ xcat_iso_path }}"]
+      environment: "{{ xcat_env }}"
+      changed_when: true
+
+# ---------- Is everything the node install needs available? ----------
+# Looks in the copied media and in the local mirrors behind xcat_install_repos.
+- name: Look for the packages the install needs
+  ansible.builtin.find:
+    paths: "{{ xcat_pkg_search_dirs }}"
+    patterns: "{{ item }}-[0-9]*.rpm"
+    recurse: true
+  register: xcat_media_pkgs
+  loop: "{{ xcat_required_media_pkgs }}"
+
+- name: Stop if a package is missing everywhere (Minimal ISO without mirrors?)
+  ansible.builtin.assert:
+    that: missing | length == 0
+    fail_msg: >-
+      Missing from {{ xcat_pkg_search_dirs | join(', ') }}: {{ missing | join(', ') }}.
+      With the Minimal ISO, add full BaseOS/AppStream mirrors in xcat_install_repos
+      and xcat_pkg_search_dirs, or use the DVD ISO.
+    quiet: true
+  vars:
+    missing: "{{ xcat_media_pkgs.results | selectattr('matched', 'equalto', 0) | map(attribute='item') | list }}"

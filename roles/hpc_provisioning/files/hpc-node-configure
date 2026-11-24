@@ -1,0 +1,82 @@
+#!/bin/bash
+# hpc-node-configure [--reconfigure] <node>
+# Started by "hpc-node provision" (via hpc-configure@<node>.service), or by hand
+# through "hpc-node configure <node>" with --reconfigure (skips the reinstall checks).
+#
+#   APPROVED -> INSTALLING -> INSTALLED -> NETBOOT_DISABLED -> CONFIGURING -> VALIDATING -> READY
+#   any failure -> FAILED (with the reason in the message column and the log)
+#
+# xCAT reports the install itself (node status installing -> booting -> booted),
+# so no Cobbler-style trigger or event queue is needed.
+set -uo pipefail
+# shellcheck source=/dev/null
+source /usr/local/lib/hpc-provision/lib.sh
+
+reconf=0
+[ "${1:-}" = "--reconfigure" ] && { reconf=1; shift; }
+node=${1:-}; valid_node "$node"
+job=$(job_get "$node")
+fqdn="$node.$NODE_DOMAIN"
+log="$LOG_DIR/$node-$job.log"
+
+exec 9>"$STATE_DIR/$node.lock"
+flock -n 9 || die "another provisioning run for $node is active"
+
+# log everything; also show it on the terminal when run by hand
+if [ $reconf -eq 1 ]; then exec > >(tee -a "$log") 2>&1; else exec >>"$log" 2>&1; fi
+echo "==== $(date -Is) hpc-node-configure $node job=$job reconfigure=$reconf"
+
+fail() { state_set "$node" FAILED "$*"; echo "FAILED: $*"; exit 1; }
+
+node_job() {
+    ssh -n -o BatchMode=yes -o ConnectTimeout=5 "root@$fqdn" cat /etc/hpc-provision-job 2>/dev/null
+}
+
+if [ $reconf -eq 0 ]; then
+    # 1. follow the install through xCAT's status until the node runs the system
+    #    installed by THIS job and xCAT's first-boot scripts are done (status booted)
+    deadline=$(( $(date +%s) + SSH_WAIT_TIMEOUT ))
+    last=""
+    while :; do
+        st=$(node_status "$node")
+        if [ "$st" != "$last" ]; then
+            echo "$(date -Is) xCAT status: ${st:-none}"
+            case $st in
+                installing) state_set "$node" INSTALLING "installer running (xCAT status installing)" ;;
+                booting)    state_set "$node" INSTALLED "install finished, node booting from its disk" ;;
+            esac
+            last=$st
+        fi
+        if [ "$st" = "booted" ] && [ "$(node_job)" = "$job" ]; then
+            break
+        fi
+        [ "$(date +%s)" -lt "$deadline" ] || fail "node did not finish install + first boot within ${SSH_WAIT_TIMEOUT}s (xCAT status: ${st:-none})"
+        sleep 20
+    done
+    echo "node booted the install of job $job from its disk; first-boot scripts done"
+
+    # 2. xCAT switches the node to "boot from disk" at the end of the install;
+    #    make sure, so a reboot can never start another install
+    if [ "$(netboot_state "$node")" != "boot" ]; then
+        echo "chain.currstate is $(netboot_state "$node"); setting it to boot"
+        nodeset "$node" boot || fail "could not set $node to boot from disk"
+    fi
+    [ "$(netboot_state "$node")" = "boot" ] || fail "could not set $node to boot from disk"
+    state_set "$node" NETBOOT_DISABLED "xCAT boots $node from its disk"
+else
+    ssh -n -o BatchMode=yes -o ConnectTimeout=10 "root@$fqdn" true || fail "cannot ssh to $fqdn"
+fi
+
+# 3. configure with the existing project
+state_set "$node" CONFIGURING "ansible $COMPUTE_PLAYBOOK"
+cd "$ANSIBLE_DIR" || fail "no $ANSIBLE_DIR"
+ansible-playbook -i "$INVENTORY" "$COMPUTE_PLAYBOOK" --limit "${node}*" \
+    || fail "ansible $COMPUTE_PLAYBOOK failed (see $log)"
+
+# 4. validate
+state_set "$node" VALIDATING "ansible $VALIDATE_PLAYBOOK"
+ansible-playbook -i "$INVENTORY" "$VALIDATE_PLAYBOOK" --limit "${node}*" \
+    || fail "validation failed (see $log)"
+
+state_set "$node" READY "all mandatory checks passed"
+echo "==== $(date -Is) $node READY"

@@ -1,0 +1,115 @@
+#!/bin/bash
+# hpc-node -- the only command an administrator needs for compute-node provisioning (xCAT).
+#
+#   hpc-node provision <node>... [--yes] [--no-power]   reinstall (ERASES the local disk)
+#   hpc-node configure <node>...                       re-run Ansible + validation, no reinstall
+#   hpc-node status    [node...]                       current state of every / the given node(s)
+#   hpc-node log       <node>                          follow the latest provisioning log
+#   hpc-node history   <node>                          all state transitions of a node
+#   hpc-node cancel    <node>                          stop a pending install: boot from disk, FAILED
+set -uo pipefail
+# shellcheck source=/dev/null
+source /usr/local/lib/hpc-provision/lib.sh
+
+usage() { sed -n '3,10p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+
+cmd_provision() {
+    local yes=0 power=1 nodes=() n job
+    for a in "$@"; do
+        case $a in
+            --yes) yes=1 ;;
+            --no-power) power=0 ;;
+            *) valid_node "$a"; nodes+=("$a") ;;
+        esac
+    done
+    [ ${#nodes[@]} -gt 0 ] || usage
+
+    for n in "${nodes[@]}"; do
+        xcat_node_exists "$n" || die "$n is not defined in xCAT (run master.yml --tags xcat)"
+        case $(state_get "$n") in
+            APPROVED|INSTALLING|INSTALLED|NETBOOT_DISABLED|CONFIGURING|VALIDATING)
+                die "$n is already in progress ($(state_get "$n")); use 'hpc-node cancel $n' first" ;;
+        esac
+    done
+
+    if [ $yes -eq 0 ]; then
+        echo "This REINSTALLS and ERASES the local disk of: ${nodes[*]}"
+        read -r -p "Type the node names exactly as above to continue: " answer
+        [ "$answer" = "${nodes[*]}" ] || die "not confirmed"
+    fi
+
+    for n in "${nodes[@]}"; do
+        job="$(date +%Y%m%d-%H%M%S)-$n"
+        echo "$job" > "$STATE_DIR/$n.job"
+        # the Kickstart copies this into /etc/hpc-provision-job on the node
+        echo "$job" > "$JOB_DIR/$n" && chmod 0644 "$JOB_DIR/$n"
+        nodeset "$n" "osimage=$OSIMAGE" >/dev/null || die "nodeset failed for $n"
+    done
+
+    for n in "${nodes[@]}"; do
+        [ "$(netboot_state "$n")" = "install" ] || die "xCAT did not switch $n to install"
+        forget_hostkeys "$n"
+        state_set "$n" APPROVED "nodeset osimage=$OSIMAGE"
+        if [ $power -eq 1 ]; then
+            if [ "${IPMI_SET_BOOTDEV:-1}" = 1 ]; then
+                ipmi "$n" chassis bootdev pxe >/dev/null || die "IPMI bootdev failed for $n"
+            fi
+            power_restart "$n" || die "IPMI power command failed for $n"
+            state_set "$n" APPROVED "PXE requested, node power-restarted"
+        else
+            echo "$n: power it on (network boot) yourself, e.g. on the KVM host: virsh start $n"
+        fi
+        # the worker waits for the install, then configures and validates
+        systemctl start --no-block "hpc-configure@${n}.service"
+        echo "$n: job $(job_get "$n") started. Follow with: hpc-node log $n"
+    done
+}
+
+cmd_configure() {
+    [ $# -gt 0 ] || usage
+    for n in "$@"; do
+        valid_node "$n"
+        /usr/local/sbin/hpc-node-configure --reconfigure "$n"
+    done
+}
+
+cmd_status() {
+    local nodes=("$@") n line st since job msg
+    if [ ${#nodes[@]} -eq 0 ]; then
+        mapfile -t nodes < <(nodels "$NODE_GROUP" 2>/dev/null | grep -E "$NODES_REGEX")
+    fi
+    printf '%-6s %-17s %-8s %-11s %-26s %-24s %s\n' NODE STATE NETBOOT XCAT SINCE JOB MESSAGE
+    for n in "${nodes[@]}"; do
+        line=$(state_line "$n")
+        IFS=$'\t' read -r since st job msg <<< "${line:-$'-\tUNKNOWN\t-\t'}"
+        printf '%-6s %-17s %-8s %-11s %-26s %-24s %s\n' "$n" "$st" "$(netboot_state "$n")" \
+            "$(node_status "$n")" "$since" "$job" "$msg"
+    done
+}
+
+cmd_log() {
+    valid_node "${1:-}"
+    local f
+    f="$LOG_DIR/$1-$(job_get "$1").log"
+    [ -f "$f" ] || { echo "(no log yet: $f; showing state history)"; cmd_history "$1"; exit 0; }
+    tail -n 50 -F "$f"
+}
+
+cmd_history() { valid_node "${1:-}"; column -t -s $'\t' "$STATE_DIR/$1" 2>/dev/null || echo "no history"; }
+
+cmd_cancel() {
+    valid_node "${1:-}"
+    systemctl stop "hpc-configure@$1.service" 2>/dev/null || true
+    nodeset "$1" boot >/dev/null
+    state_set "$1" FAILED "cancelled by administrator"
+}
+
+case ${1:-} in
+    provision) shift; cmd_provision "$@" ;;
+    configure) shift; cmd_configure "$@" ;;
+    status)    shift; cmd_status "$@" ;;
+    log)       shift; cmd_log "$@" ;;
+    history)   shift; cmd_history "$@" ;;
+    cancel)    shift; cmd_cancel "$@" ;;
+    *) usage ;;
+esac

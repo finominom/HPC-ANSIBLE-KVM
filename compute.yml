@@ -1,7 +1,7 @@
 ---
-# Configures compute nodes after Cobbler has installed them.
-# Prerequisites: master.yml has been run, and the offline repos exist on
-# master at http://192.168.1.1/repos/ (baseos, appstream, crb, epel-lmod).
+# Configures compute nodes after xCAT has installed them (hpc-node runs it
+# automatically). Prerequisites: master.yml has been run, and the offline repos
+# exist on the master at http://192.168.16.1/repos/ (baseos, appstream, crb, epel-lmod).
 - name: Configure the compute nodes
   hosts: compute
   become: true
@@ -24,14 +24,13 @@
       - /etc/modulefiles
       - /usr/share/modulefiles
 
-
-
   roles:
     - { role: base, tags: [base] }
     - { role: service_accounts, tags: [service_accounts] }
     - { role: chrony, tags: [chrony] }
     - { role: nfs_client, tags: [nfs] }
     - { role: slurm, tags: [slurm] }
+    - { role: monitoring, tags: [monitoring] }
 
   tasks:
     - name: Install MPI, build tools and Lmod from the local repo

@@ -4,7 +4,6 @@
 # (everything between "NodeName=c01" and "UpTime=").
 slurm_node_params: "CPUs=2 Boards=1 SocketsPerBoard=2 CoresPerSocket=1 ThreadsPerCore=1 RealMemory=3400"
 
-# MAC of the VM (virsh domiflist NAME), lower-case with colons.
-# Cobbler creates the system record from this, and host-prep/compute-vms.yml
-# gives the VM the same MAC.
-cobbler_mac: "52:54:00:aa:bb:01"
+# MAC of the VM (virsh domiflist c01), lower-case with colons. The xcat role
+# defines the xCAT node with it; lab/lab-node.sh gives the VM the same MAC.
+xcat_mac: "52:54:00:aa:bb:01"

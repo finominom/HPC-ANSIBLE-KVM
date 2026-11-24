@@ -1,0 +1,87 @@
+---
+# Cluster alert rules (node_exporter). Managed by Ansible (roles/monitoring).
+# The Slurm alerts come from the Slurm exporter project (slurm-alerts.yml).
+groups:
+  - name: hpc.hosts
+    rules:
+      - alert: HostDown
+        expr: up{job="node"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} is not answering"
+          description: "node_exporter on {{ $labels.instance }} has not answered for 2 minutes: host down, network, or node_exporter stopped."
+
+      - alert: SlurmExporterDown
+        expr: up{job="slurm"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The Slurm exporter is not answering"
+          description: "No Slurm metrics for 5 minutes. Check: systemctl status slurm_exporter slurmctld munge."
+
+      - alert: FilesystemAlmostFull
+        expr: |
+          (1 - node_filesystem_avail_bytes{fstype=~"xfs|ext4"}
+             / node_filesystem_size_bytes{fstype=~"xfs|ext4"}) > 0.90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.mountpoint }} on {{ $labels.instance }} is over 90% full"
+          description: "{{ $labels.mountpoint }} ({{ $labels.device }}) has {{ $value | humanizePercentage }} used."
+
+      - alert: FilesystemReadOnly
+        expr: node_filesystem_readonly{fstype=~"xfs|ext4"} == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.mountpoint }} on {{ $labels.instance }} is read-only"
+          description: "Usually a disk or filesystem error. Check dmesg on {{ $labels.instance }}."
+
+      - alert: MemoryLow
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} has less than 5% memory available"
+          description: "Available memory is {{ $value | humanizePercentage }} of the total."
+
+      - alert: ClockNotSynchronised
+        expr: node_timex_sync_status == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The clock of {{ $labels.instance }} is not synchronised"
+          description: "chrony has no usable source. Munge and Slurm fail when clocks drift. Check: chronyc sources."
+
+      - alert: ClockOffsetLarge
+        expr: abs(node_timex_offset_seconds) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The clock of {{ $labels.instance }} is {{ $value }}s off"
+          description: "Clock offset above 50 ms for 10 minutes."
+
+      - alert: SystemdUnitFailed
+        expr: node_systemd_unit_state{state="failed"} == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.name }} failed on {{ $labels.instance }}"
+          description: "Check: systemctl status {{ $labels.name }}; journalctl -u {{ $labels.name }} -b"
+
+      - alert: HostRebooted
+        expr: time() - node_boot_time_seconds < 600
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.instance }} rebooted in the last 10 minutes"
+          description: "Expected after an install or maintenance; otherwise check why."

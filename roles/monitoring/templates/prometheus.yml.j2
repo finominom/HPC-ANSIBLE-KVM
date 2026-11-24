@@ -1,0 +1,46 @@
+# {{ ansible_managed }}
+# Edit roles/monitoring (or the inventory), not this file.
+global:
+  scrape_interval: {{ monitoring_scrape_interval }}
+  evaluation_interval: {{ monitoring_scrape_interval }}
+  external_labels:
+    cluster: {{ cluster_name }}
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["{{ monitoring_alertmanager_listen }}"]
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["{{ monitoring_prometheus_listen }}"]
+        labels: { instance: master }
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["{{ monitoring_alertmanager_listen }}"]
+        labels: { instance: master }
+
+  # node_exporter on every host in [{{ monitoring_scrape_group }}]; the
+  # instance label is the short host name (master, c01, ...)
+  - job_name: node
+    static_configs:
+{% for h in groups[monitoring_scrape_group] | default([]) %}
+      - targets: ["{{ cluster_hosts[hostvars[h].inventory_hostname_short].hpc }}:{{ monitoring_node_exporter_port }}"]
+        labels:
+          instance: {{ hostvars[h].inventory_hostname_short }}
+          role: {{ 'master' if h in (groups['master'] | default([])) else 'compute' }}
+{% endfor %}
+{% if monitoring_slurm_exporter_enabled | bool %}
+
+  - job_name: slurm
+    scrape_interval: {{ monitoring_slurm_scrape_interval }}
+    scrape_timeout: 50s
+    static_configs:
+      - targets: ["{{ monitoring_slurm_exporter_listen }}"]
+        labels: { instance: master }
+{% endif %}

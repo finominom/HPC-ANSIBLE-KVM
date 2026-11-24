@@ -1,8 +1,11 @@
 ---
-# Runs ONLY the provisioning role on the master, so the older "cobbler" role (which tries
-# "cobbler import" on the Minimal ISO) is not involved.
-#   ansible-playbook master.yml --tags cobbler --ask-vault-pass   (ansible.cfg picks the inventory)
-- hosts: master.hpc
+# Runs only the provisioning roles on the master (xCAT install server and the
+# hpc-node controller), without the rest of master.yml.
+#   ansible-playbook lab/provision-master.yml --ask-vault-pass        (ansible.cfg picks the inventory)
+#   ansible-playbook lab/provision-master.yml --ask-vault-pass -e xcat_enable_dhcp=true   (stop gate D)
+- name: Provisioning roles on the master
+  hosts: master.hpc
   become: true
   roles:
-    - cobbler_provisioning
+    - xcat
+    - hpc_provisioning

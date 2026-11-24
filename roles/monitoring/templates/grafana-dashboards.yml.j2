@@ -1,0 +1,14 @@
+# {{ ansible_managed }}
+# Every JSON file under this folder becomes a dashboard; sub-folders become
+# Grafana folders (Nodes, Slurm). Changes made in the web UI are not saved
+# back to these files: copy a dashboard ("Save as") to customise it.
+apiVersion: 1
+providers:
+  - name: hpc
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 60
+    options:
+      path: {{ monitoring_grafana_dashboard_dir }}
+      foldersFromFilesStructure: true

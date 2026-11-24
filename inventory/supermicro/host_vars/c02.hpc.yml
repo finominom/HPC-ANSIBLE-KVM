@@ -1,3 +1,3 @@
 ---
 slurm_node_params: "CPUs=16 Boards=1 SocketsPerBoard=2 CoresPerSocket=8 ThreadsPerCore=1 RealMemory=63000"
-# cobbler_mac: "AA:BB:CC:DD:EE:02"
+# xcat_mac: "aa:bb:cc:dd:ee:02"

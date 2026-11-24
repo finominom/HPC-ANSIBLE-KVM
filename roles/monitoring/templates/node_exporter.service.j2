@@ -1,0 +1,23 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Prometheus node_exporter (host metrics)
+Documentation=https://github.com/prometheus/node_exporter
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=node_exporter
+Group=node_exporter
+ExecStart=/usr/local/bin/node_exporter \
+  --web.listen-address=:{{ monitoring_node_exporter_port }}{% for a in monitoring_node_exporter_args %} \
+  {{ a }}{% endfor %}
+
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectHome=read-only
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

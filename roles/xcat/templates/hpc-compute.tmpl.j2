@@ -1,0 +1,104 @@
+# {{ ansible_managed }}
+# HPC compute node, AlmaLinux {{ xcat_osver | regex_replace('^alma', '') }}.
+# Based on xCAT's compute.rhels9.tmpl. Rendered twice: by Ansible (the
+# double-brace values) and by xCAT's nodeset (the #...# keywords).
+# Read the result for a node in /install/autoinst/NODE after nodeset.
+# WARNING: wipes the install disk of the node.
+text
+%include /tmp/repos
+{% for r in xcat_install_repos %}
+repo --name={{ r.name }} --baseurl={{ r.url }}
+{% endfor %}
+keyboard --vckeymap=us --xlayouts='us'
+lang en_US.UTF-8
+
+#KICKSTARTNET#
+rootpw --iscrypted #CRYPT:passwd:key=system,username=root:password#
+# The master's key, so Ansible can log in as soon as the node is up
+sshkey --username=root "{{ xcat_master_pubkey }}"
+firstboot --disable
+skipx
+services --enabled=chronyd,sshd
+timezone #TABLE:site:key=timezone:value# --utc
+
+zerombr
+{% if xcat_root_mb | int > 0 %}
+# Our layout (written by the second %pre below): /boot, swap, / fixed, /scratch = rest
+%include /tmp/hpc-disk.ks
+{% else %}
+clearpart --all --initlabel
+#XCAT_PARTITION_START#
+%include /tmp/partitionfile
+#XCAT_PARTITION_END#
+{% endif %}
+
+# Changed from xCAT's template (which disables both):
+firewall --enabled --service=ssh
+selinux --{{ xcat_node_selinux }}
+reboot
+
+%packages
+#INCLUDE_DEFAULT_PKGLIST#
+%end
+
+%pre
+{
+echo "Running Kickstart Pre-installation script..."
+#INCLUDE:#ENV:XCATROOT#/share/xcat/install/scripts/pre.rhels8#
+} &>>/tmp/pre-install.log
+%end
+{% if xcat_root_mb | int > 0 %}
+
+# Install disk and layout. Override the disk with xcat_install_disk (e.g. sda);
+# otherwise the first non-removable, non-USB disk is used.
+%pre --log=/tmp/hpc-pre.log --erroronfail
+DISK="{{ xcat_install_disk }}"
+if [ -z "$DISK" ]; then
+    DISK=$(lsblk -dno NAME,TYPE,RM,TRAN | awk '$1 !~ /^(zram|loop|sr|fd|nbd|ram)/ && $2=="disk" && $3=="0" && $4!="usb" {print $1; exit}')
+fi
+[ -n "$DISK" ] && [ -b "/dev/$DISK" ] || { echo "no install disk found"; exit 1; }
+# remove leftovers of earlier installs (LVM, RAID, filesystem signatures)
+vgchange -an >/dev/null 2>&1 || true
+for p in $(lsblk -lnpo NAME "/dev/$DISK" | tac); do wipefs -af "$p" || true; done
+cat > /tmp/hpc-disk.ks <<EOF
+ignoredisk --only-use=$DISK
+clearpart --all --initlabel --drives=$DISK
+bootloader --location=mbr --boot-drive=$DISK --append="console=tty0 console=ttyS0,115200 #ENV:PERSKCMDLINE#"
+reqpart
+part /boot    --fstype=xfs --size=1024 --ondisk=$DISK
+part swap     --size={{ xcat_swap_mb }} --ondisk=$DISK
+part /        --fstype=xfs --size={{ xcat_root_mb }} --ondisk=$DISK
+part /scratch --fstype=xfs --size=1 --grow --ondisk=$DISK
+EOF
+cat /tmp/hpc-disk.ks
+%end
+{% endif %}
+
+%post --interpreter=/bin/bash
+mkdir -p /var/log/xcat/
+cat /tmp/pre-install.log >>/var/log/xcat/xcat.log
+{
+echo "Running Kickstart Post-installation script..."
+#INCLUDE:#ENV:XCATROOT#/share/xcat/install/scripts/post.xcat.ng#
+#INCLUDE:#ENV:XCATROOT#/share/xcat/install/scripts/post.rhels8#
+} &>>/var/log/xcat/xcat.log
+%end
+
+# hpc-node: record which provisioning job installed this system, so the
+# master knows the node is running THIS install (not an old one).
+%post --interpreter=/bin/bash --log=/root/hpc-ks-post.log
+NODE="#TABLE:nodelist:$NODE:node#"
+MASTER="#XCATVAR:XCATMASTER#"
+echo "$NODE" > /etc/hpc-node-name
+curl -fsS -m 15 "http://$MASTER{{ xcat_job_url_path }}/$NODE" -o /etc/hpc-provision-job \
+    || echo "none" > /etc/hpc-provision-job
+cat /etc/hpc-provision-job
+%end
+{% if xcat_node_selinux != 'disabled' %}
+
+# Files written by xCAT's scripts above (SSH keys, repo files) have no
+# SELinux label yet. Relabel on first boot (adds one reboot).
+%post --interpreter=/bin/bash
+touch /.autorelabel
+%end
+{% endif %}

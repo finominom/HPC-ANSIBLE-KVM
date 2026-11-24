@@ -1,0 +1,104 @@
+---
+- name: Check the node root password hash is set
+  ansible.builtin.assert:
+    that:
+      - vault_node_root_password_hash is defined
+      - vault_node_root_password_hash is match('^\$6\$')
+      - "'CHANGE-ME' not in vault_node_root_password_hash"
+    fail_msg: "Set vault_node_root_password_hash (output of: openssl passwd -6) in group_vars/master/vault.yml."
+    quiet: true
+
+- name: Check the BMC password is set when IPMI is used
+  ansible.builtin.assert:
+    that:
+      - xcat_bmc_username | length > 0
+      - xcat_bmc_password | length > 0
+      - "'CHANGE-ME' not in xcat_bmc_password"
+    fail_msg: "xcat_use_ipmi is true: set xcat_bmc_username and vault_bmc_password (group_vars/master)."
+    quiet: true
+  when: xcat_use_ipmi | bool
+
+- name: Check the cluster settings the role needs
+  ansible.builtin.assert:
+    that:
+      - xcat_osver is defined and xcat_osver is match('^alma[0-9]+\.[0-9]+$')
+      - xcat_arch is defined
+      - master_if_cluster is defined
+    fail_msg: >-
+      Set xcat_osver (for example alma9.8) and xcat_arch in group_vars/all.yml,
+      and master_if_cluster in group_vars/master/main.yml.
+    quiet: true
+
+# xCAT takes its own name and domain from the system. They must be the
+# cluster-side ones, served by BIND (runbook 8.5: the master uses its own DNS).
+- name: Check the master's host name
+  ansible.builtin.command: hostname -f
+  register: xcat_fqdn
+  changed_when: false
+
+- name: Require the FQDN master.{{ cluster_domain }}
+  ansible.builtin.assert:
+    that: xcat_fqdn.stdout == 'master.' ~ cluster_domain
+    fail_msg: >-
+      hostname -f says '{{ xcat_fqdn.stdout }}'. Run the base role, and check
+      /etc/hosts does not map master.{{ cluster_domain }} to 127.0.x.x.
+    quiet: true
+
+- name: Look up the master and every compute node through the system resolver
+  ansible.builtin.command: getent ahostsv4 {{ item }}
+  register: xcat_lookup
+  changed_when: false
+  failed_when: false
+  loop: "{{ ['master.' ~ cluster_domain] + (groups['compute'] | default([])) }}"
+
+- name: Require DNS answers that match cluster_hosts (self-DNS step done?)
+  ansible.builtin.assert:
+    that:
+      - item.rc == 0
+      - (item.stdout_lines | first | default('')).split() | first | default('') == cluster_hosts[item.item.split('.')[0]].hpc
+    fail_msg: >-
+      {{ item.item }} resolves to '{{ (item.stdout_lines | first | default('nothing')).split() | first | default('nothing') }}',
+      expected {{ cluster_hosts[item.item.split('.')[0]].hpc }}. Run the bind role and point the
+      master at its own DNS (runbook 8.5) before this role.
+    quiet: true
+  loop: "{{ xcat_lookup.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Require the master's root SSH key (created by the base role)
+  ansible.builtin.stat:
+    path: /root/.ssh/id_ed25519.pub
+  register: xcat_pubkey_stat
+
+- name: Stop if the key is missing
+  ansible.builtin.assert:
+    that: xcat_pubkey_stat.stat.exists
+    fail_msg: "/root/.ssh/id_ed25519.pub is missing. Run the base role first."
+    quiet: true
+
+# ---------- Node MAC addresses (single source for xCAT and the VMs) ----------
+- name: List the compute nodes that have a MAC address
+  ansible.builtin.set_fact:
+    xcat_nodes: >-
+      {{ groups['compute'] | default([]) | map('extract', hostvars)
+         | selectattr('xcat_mac', 'defined') | map(attribute='inventory_hostname') | list }}
+
+- name: Check each MAC is lower-case with colons
+  ansible.builtin.assert:
+    that: hostvars[item].xcat_mac is match('^([0-9a-f]{2}:){5}[0-9a-f]{2}$')
+    fail_msg: "xcat_mac for {{ item }} must look like 52:54:00:aa:bb:01 (lower-case, colons)."
+    quiet: true
+  loop: "{{ xcat_nodes }}"
+
+- name: Check no two nodes share a MAC
+  ansible.builtin.assert:
+    that: (xcat_nodes | map('extract', hostvars, 'xcat_mac') | unique | length) == (xcat_nodes | length)
+    fail_msg: Two compute nodes have the same xcat_mac.
+    quiet: true
+
+- name: Report nodes without a MAC (they are not defined in xCAT)
+  ansible.builtin.debug:
+    msg: >-
+      No xcat_mac for {{ groups['compute'] | default([]) | difference(xcat_nodes) | join(', ') }}.
+      Set it in host_vars/NODE.yml to have the node defined in xCAT.
+  when: (groups['compute'] | default([]) | difference(xcat_nodes) | length) > 0

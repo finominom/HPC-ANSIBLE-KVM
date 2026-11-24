@@ -1,0 +1,60 @@
+---
+- name: Create the node_exporter system user
+  ansible.builtin.user:
+    name: node_exporter
+    system: true
+    shell: /sbin/nologin
+    home: /var/lib/node_exporter
+    create_home: false
+    comment: Prometheus node_exporter
+
+- name: Create the textfile collector folder
+  ansible.builtin.file:
+    path: /var/lib/node_exporter/textfile
+    state: directory
+    owner: node_exporter
+    group: node_exporter
+    mode: "0755"
+
+- name: Install the node_exporter binary
+  ansible.builtin.copy:
+    src: "{{ monitoring_dist_dir }}/{{ monitoring_downloads.node_exporter.dir }}/node_exporter"
+    dest: /usr/local/bin/node_exporter
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart node_exporter
+
+- name: Restore the SELinux label of the binary
+  ansible.builtin.command: restorecon -v /usr/local/bin/node_exporter
+  register: monitoring_ne_label
+  changed_when: monitoring_ne_label.stdout | length > 0
+  when: ansible_facts.selinux.status | default('disabled') == 'enabled'
+
+- name: Deploy the node_exporter unit
+  ansible.builtin.template:
+    src: node_exporter.service.j2
+    dest: /etc/systemd/system/node_exporter.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart node_exporter
+
+- name: Start node_exporter
+  ansible.builtin.systemd:
+    name: node_exporter
+    state: started
+    enabled: true
+    daemon_reload: true
+
+# Only the master may scrape it: a rich rule, not an open port.
+- name: Let the master scrape node_exporter
+  ansible.posix.firewalld:
+    zone: "{{ monitoring_firewall_zone }}"
+    rich_rule: >-
+      rule family="ipv4" source address="{{ monitoring_scraper_ip }}/32"
+      port port="{{ monitoring_node_exporter_port }}" protocol="tcp" accept
+    permanent: true
+    immediate: true
+    state: enabled
+  when: not (monitoring_is_server | bool)

@@ -1,6 +1,7 @@
 <!-- {{ ansible_managed }} -->
 <!-- Compute node {{ vm_name }}: legacy BIOS, one NIC on the cluster network,
-     network boot first so Cobbler can install it, then the disk. -->
+     network boot first so xCAT can install it (xNBA), then the disk.
+     After the install xCAT answers the network boot with "boot from disk". -->
 <domain type='kvm'>
   <name>{{ vm_name }}</name>
   <memory unit='MiB'>{{ vm_memory_mb }}</memory>

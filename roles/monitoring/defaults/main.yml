@@ -1,0 +1,128 @@
+---
+# Monitoring: Prometheus + Alertmanager + Grafana on the master,
+# node_exporter on every host, slurm_exporter on the master.
+# Read roles/monitoring/README.md first.
+
+monitoring_is_server: "{{ inventory_hostname in (groups['master'] | default([])) }}"
+
+# ---------------------------------------------------------------------------
+# Versions (pinned; downloaded once on the master, checked by SHA-256)
+# ---------------------------------------------------------------------------
+monitoring_arch: linux-amd64
+monitoring_prometheus_version: "3.13.5"       # 3.13 is a Long Term Support release
+monitoring_alertmanager_version: "0.35.0"
+monitoring_node_exporter_version: "1.12.1"
+monitoring_slurm_exporter_version: "1.8.6"    # github.com/sckyzo/slurm_exporter
+
+# Where the master keeps the downloaded archives. The compute nodes have no
+# internet: Ansible copies node_exporter to them from here.
+monitoring_dist_dir: /opt/monitoring-dist
+
+# Release download folders on GitHub, and the archive file names
+monitoring_prom_rel: "https://github.com/prometheus/prometheus/releases/download/v{{ monitoring_prometheus_version }}"
+monitoring_am_rel: "https://github.com/prometheus/alertmanager/releases/download/v{{ monitoring_alertmanager_version }}"
+monitoring_ne_rel: "https://github.com/prometheus/node_exporter/releases/download/v{{ monitoring_node_exporter_version }}"
+monitoring_se_rel: "https://github.com/SckyzO/slurm_exporter/releases/download/v{{ monitoring_slurm_exporter_version }}"
+
+monitoring_downloads:
+  prometheus:
+    url: "{{ monitoring_prom_rel }}/prometheus-{{ monitoring_prometheus_version }}.{{ monitoring_arch }}.tar.gz"
+    sums: "{{ monitoring_prom_rel }}/sha256sums.txt"
+    dir: "prometheus-{{ monitoring_prometheus_version }}.{{ monitoring_arch }}"
+    bins: [prometheus, promtool]
+  alertmanager:
+    url: "{{ monitoring_am_rel }}/alertmanager-{{ monitoring_alertmanager_version }}.{{ monitoring_arch }}.tar.gz"
+    sums: "{{ monitoring_am_rel }}/sha256sums.txt"
+    dir: "alertmanager-{{ monitoring_alertmanager_version }}.{{ monitoring_arch }}"
+    bins: [alertmanager, amtool]
+  node_exporter:
+    url: "{{ monitoring_ne_rel }}/node_exporter-{{ monitoring_node_exporter_version }}.{{ monitoring_arch }}.tar.gz"
+    sums: "{{ monitoring_ne_rel }}/sha256sums.txt"
+    dir: "node_exporter-{{ monitoring_node_exporter_version }}.{{ monitoring_arch }}"
+    bins: [node_exporter]
+  slurm_exporter:
+    url: "{{ monitoring_se_rel }}/slurm_exporter-{{ monitoring_slurm_exporter_version }}-{{ monitoring_arch }}.tar.gz"
+    sums: "{{ monitoring_se_rel }}/slurm_exporter_checksums.txt"
+    # this archive has no top folder: unpack it into its own one
+    dir: "slurm_exporter-{{ monitoring_slurm_exporter_version }}-{{ monitoring_arch }}"
+    flat: true
+    bins: [slurm_exporter]
+
+# ---------------------------------------------------------------------------
+# node_exporter (every host)
+# ---------------------------------------------------------------------------
+monitoring_node_exporter_port: 9100
+# Extra collectors: systemd (failed units), and a folder for your own
+# *.prom files (e.g. from cron jobs: GPU, InfiniBand, job counts).
+monitoring_node_exporter_args:
+  - "--collector.systemd"
+  - "--collector.textfile.directory=/var/lib/node_exporter/textfile"
+# Who may scrape node_exporter: only the master, on the cluster network.
+monitoring_scraper_ip: "{{ master_cluster_ip }}"
+monitoring_firewall_zone: internal
+
+# ---------------------------------------------------------------------------
+# Prometheus (master)
+# ---------------------------------------------------------------------------
+# Hosts Prometheus scrapes: the inventory group below. In inventory/kvm it
+# holds only the master until c01/c02 are installed (like [slurm_nodes]).
+monitoring_scrape_group: monitored
+monitoring_prometheus_listen: "127.0.0.1:9090"
+monitoring_prometheus_data_dir: /var/lib/prometheus
+monitoring_prometheus_retention: 30d
+monitoring_scrape_interval: 30s
+monitoring_slurm_scrape_interval: 60s
+
+# ---------------------------------------------------------------------------
+# slurm_exporter (master). Runs sinfo/squeue/sdiag/sshare/scontrol.
+# ---------------------------------------------------------------------------
+monitoring_slurm_exporter_enabled: true
+monitoring_slurm_exporter_listen: "127.0.0.1:9341"
+# EPEL's Slurm is 22.05, older than the exporter's tested 23-26 window. If a
+# collector reports FAIL on the "Exporter Health" dashboard, switch it off
+# here, e.g. ["--no-collector.licenses"].
+monitoring_slurm_exporter_args: []
+
+# ---------------------------------------------------------------------------
+# Alertmanager (master)
+# ---------------------------------------------------------------------------
+monitoring_alertmanager_listen: "127.0.0.1:9093"
+# Leave empty to keep alerts on the Alertmanager page and in Grafana only.
+# To e-mail them, set an address and the SMTP settings (password in the vault).
+monitoring_alert_email_to: ""
+monitoring_smtp_smarthost: "smtp.gmail.com:587"
+monitoring_smtp_from: ""
+monitoring_smtp_username: ""
+monitoring_smtp_password: "{{ vault_alert_smtp_password | default('') }}"
+
+# ---------------------------------------------------------------------------
+# Grafana (master), from the official Grafana repository
+# ---------------------------------------------------------------------------
+monitoring_grafana_repo: https://rpm.grafana.com
+# 127.0.0.1 = reach it through an SSH tunnel:
+#   ssh -L 3000:localhost:3000 root@MASTER   then open http://localhost:3000
+monitoring_grafana_addr: "127.0.0.1"
+monitoring_grafana_port: 3000
+# Set a firewall zone (e.g. internal) only if monitoring_grafana_addr is not
+# 127.0.0.1 and people should reach Grafana directly.
+monitoring_grafana_open_zone: ""
+monitoring_grafana_admin_password: "{{ vault_grafana_admin_password }}"
+monitoring_grafana_dashboard_dir: /var/lib/grafana/dashboards
+
+# Dashboards, fetched at pinned versions. Folder name -> list of files.
+monitoring_se_raw: "https://raw.githubusercontent.com/SckyzO/slurm_exporter/v{{ monitoring_slurm_exporter_version }}"
+monitoring_slurm_dashboard_base: "{{ monitoring_se_raw }}/monitoring/grafana/dashboards"
+# rfmoz/grafana-dashboards (source of grafana.com dashboard 1860), pinned commit
+monitoring_node_dashboard_commit: b07d8a90d8fadd112e9ac841b777ee863cda850b
+monitoring_node_dashboard_base: "https://raw.githubusercontent.com/rfmoz/grafana-dashboards/{{ monitoring_node_dashboard_commit }}/prometheus"
+monitoring_dashboards:
+  - { folder: Nodes, url: "{{ monitoring_node_dashboard_base }}/node-exporter-full.json", file: node-exporter-full.json }
+  - { folder: Nodes, url: "{{ monitoring_node_dashboard_base }}/nfs-full.json", file: nfs-full.json }
+  - { folder: Slurm, url: "{{ monitoring_slurm_dashboard_base }}/01-slurm-overview.json", file: 01-slurm-overview.json }
+  - { folder: Slurm, url: "{{ monitoring_slurm_dashboard_base }}/02-slurm-jobs.json", file: 02-slurm-jobs.json }
+  - { folder: Slurm, url: "{{ monitoring_slurm_dashboard_base }}/03-slurm-nodes.json", file: 03-slurm-nodes.json }
+  - { folder: Slurm, url: "{{ monitoring_slurm_dashboard_base }}/04-slurm-usage.json", file: 04-slurm-usage.json }
+  - { folder: Slurm, url: "{{ monitoring_slurm_dashboard_base }}/05-slurm-scheduler.json", file: 05-slurm-scheduler.json }
+  - { folder: Slurm, url: "{{ monitoring_slurm_dashboard_base }}/08-slurm-health.json", file: 08-slurm-health.json }
+# Alert rules shipped with the Slurm exporter (same pinned version)
+monitoring_slurm_rules_base: "{{ monitoring_se_raw }}/monitoring/prometheus"

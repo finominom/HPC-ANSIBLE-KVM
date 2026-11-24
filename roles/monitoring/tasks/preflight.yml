@@ -1,0 +1,33 @@
+---
+- name: Check the Grafana admin password is set
+  ansible.builtin.assert:
+    that:
+      - vault_grafana_admin_password is defined
+      - vault_grafana_admin_password | length >= 12
+      - "'CHANGE-ME' not in vault_grafana_admin_password"
+    fail_msg: >-
+      Set vault_grafana_admin_password (12+ characters) in group_vars/master/vault.yml
+      of this inventory (ansible-vault edit ...).
+    quiet: true
+  when: monitoring_is_server | bool
+
+- name: Check the e-mail settings when alerts are mailed
+  ansible.builtin.assert:
+    that:
+      - monitoring_smtp_from | length > 0
+      - monitoring_smtp_username | length > 0
+      - monitoring_smtp_password | length > 0
+    fail_msg: >-
+      monitoring_alert_email_to is set: also set monitoring_smtp_from,
+      monitoring_smtp_username and vault_alert_smtp_password.
+    quiet: true
+  when:
+    - monitoring_is_server | bool
+    - monitoring_alert_email_to | length > 0
+
+- name: Check the scrape group exists
+  ansible.builtin.assert:
+    that: (groups[monitoring_scrape_group] | default([]) | length) > 0
+    fail_msg: "Inventory group [{{ monitoring_scrape_group }}] is missing or empty (see hosts.ini)."
+    quiet: true
+  when: monitoring_is_server | bool

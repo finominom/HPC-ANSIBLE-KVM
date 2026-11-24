@@ -1,0 +1,153 @@
+---
+# Grafana OSS from the official repository: the bundled dashboards need
+# Grafana 12 or newer, which is more recent than AppStream's grafana.
+- name: Add the Grafana repository
+  ansible.builtin.yum_repository:
+    name: grafana
+    description: Grafana OSS
+    baseurl: "{{ monitoring_grafana_repo }}"
+    gpgcheck: true
+    repo_gpgcheck: true
+    gpgkey: "{{ monitoring_grafana_repo }}/gpg.key"
+    sslverify: true
+    sslcacert: /etc/pki/tls/certs/ca-bundle.crt
+    enabled: true
+
+- name: Install Grafana
+  ansible.builtin.dnf:
+    name: grafana
+    state: present
+  register: monitoring_grafana_pkg
+
+# The admin password in grafana.ini is used only when Grafana creates its
+# database (first start). Later changes are applied with grafana cli below.
+- name: Configure grafana.ini
+  community.general.ini_file:
+    path: /etc/grafana/grafana.ini
+    section: "{{ item.s }}"
+    option: "{{ item.o }}"
+    value: "{{ item.v }}"
+    owner: root
+    group: grafana
+    mode: "0640"
+  loop:
+    - { s: server, o: http_addr, v: "{{ monitoring_grafana_addr }}" }
+    - { s: server, o: http_port, v: "{{ monitoring_grafana_port }}" }
+    - { s: security, o: admin_user, v: admin }
+    - { s: security, o: admin_password, v: "{{ monitoring_grafana_admin_password }}" }
+    - { s: security, o: disable_gravatar, v: "true" }
+    - { s: users, o: allow_sign_up, v: "false" }
+    - { s: auth.anonymous, o: enabled, v: "false" }
+    # no calls home: the cluster may have no internet later
+    - { s: analytics, o: reporting_enabled, v: "false" }
+    - { s: analytics, o: check_for_updates, v: "false" }
+    - { s: analytics, o: check_for_plugin_updates, v: "false" }
+    - { s: news, o: news_feed_enabled, v: "false" }
+  loop_control:
+    label: "{{ item.s }}.{{ item.o }}"
+  register: monitoring_grafana_ini
+  no_log: true
+  notify: Restart grafana
+
+# ---------- provisioning: data source and dashboards ----------
+- name: Provision the Prometheus data source
+  ansible.builtin.template:
+    src: grafana-datasource.yml.j2
+    dest: /etc/grafana/provisioning/datasources/prometheus.yml
+    owner: root
+    group: grafana
+    mode: "0640"
+  notify: Restart grafana
+
+- name: Provision the dashboard folder
+  ansible.builtin.template:
+    src: grafana-dashboards.yml.j2
+    dest: /etc/grafana/provisioning/dashboards/hpc.yml
+    owner: root
+    group: grafana
+    mode: "0640"
+  notify: Restart grafana
+
+- name: Create the dashboard folders
+  ansible.builtin.file:
+    path: "{{ monitoring_grafana_dashboard_dir }}/{{ item }}"
+    state: directory
+    owner: root
+    group: grafana
+    mode: "0755"
+  loop: "{{ monitoring_dashboards | map(attribute='folder') | unique | list }}"
+
+- name: Fetch the dashboards (pinned versions)
+  ansible.builtin.get_url:
+    url: "{{ item.url }}"
+    dest: "{{ monitoring_grafana_dashboard_dir }}/{{ item.folder }}/{{ item.file }}"
+    owner: root
+    group: grafana
+    mode: "0644"
+  loop: "{{ monitoring_dashboards }}"
+  loop_control:
+    label: "{{ item.folder }}/{{ item.file }}"
+
+- name: Start Grafana
+  ansible.builtin.systemd:
+    name: grafana-server
+    state: started
+    enabled: true
+
+- name: Apply a Grafana restart now if one is pending
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for Grafana
+  ansible.builtin.uri:
+    url: "http://{{ monitoring_grafana_addr }}:{{ monitoring_grafana_port }}/api/health"
+    status_code: 200
+  register: monitoring_grafana_health
+  retries: 24
+  delay: 5
+  until: monitoring_grafana_health.status == 200
+
+- name: Check the admin password works
+  ansible.builtin.uri:
+    url: "http://{{ monitoring_grafana_addr }}:{{ monitoring_grafana_port }}/api/user"
+    user: admin
+    password: "{{ monitoring_grafana_admin_password }}"
+    force_basic_auth: true
+    status_code: [200, 401]
+  register: monitoring_grafana_login
+  no_log: true
+
+- name: Set the admin password (it changed after Grafana's first start)
+  ansible.builtin.command:
+    argv:
+      - grafana
+      - cli
+      - --homepath
+      - /usr/share/grafana
+      - --config
+      - /etc/grafana/grafana.ini
+      - admin
+      - reset-admin-password
+      - "{{ monitoring_grafana_admin_password }}"
+  become: true
+  become_user: grafana
+  when: monitoring_grafana_login.status == 401
+  changed_when: true
+  no_log: true
+
+- name: Open the Grafana port in zone {{ monitoring_grafana_open_zone }}
+  ansible.posix.firewalld:
+    zone: "{{ monitoring_grafana_open_zone }}"
+    port: "{{ monitoring_grafana_port }}/tcp"
+    permanent: true
+    immediate: true
+    state: enabled
+  when: monitoring_grafana_open_zone | length > 0
+
+- name: How to open Grafana
+  ansible.builtin.debug:
+    msg: >-
+      {{ ('From your machine: ssh -L ' ~ monitoring_grafana_port ~ ':localhost:' ~ monitoring_grafana_port
+          ~ ' root@MASTER, then open http://localhost:' ~ monitoring_grafana_port)
+         if monitoring_grafana_addr == '127.0.0.1'
+         else ('Open http://' ~ monitoring_grafana_addr ~ ':' ~ monitoring_grafana_port) }}
+      - user admin, password vault_grafana_admin_password.

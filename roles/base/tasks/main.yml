@@ -68,8 +68,15 @@
         create: false
       loop: [baseos, appstream, extras]
 
+    # xCAT writes local-repository-0.repo (the install media) during the install;
+    # hpc-local.repo above already covers the master's repositories.
+    - name: Remove the repo file xCAT wrote during the install
+      ansible.builtin.file:
+        path: /etc/yum.repos.d/local-repository-0.repo
+        state: absent
+
     # Nodes are installed from the ISO; the mirror keeps only the newest builds.
-    - name: Bring the node up to date from the master's mirror
+    - name: Bring the node up to date from the master's mirror  # noqa: package-latest (intended)
       ansible.builtin.dnf:
         name: "*"
         state: latest

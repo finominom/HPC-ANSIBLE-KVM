@@ -9,5 +9,12 @@ bind_forwarders: [CAMPUS_DNS_1, CAMPUS_DNS_2]
 nfs_require_separate_data_fs: true
 slurm_innodb_buffer_pool_size: 1G
 
-cobbler_iso_path: /srv/isos/AlmaLinux-9.8-x86_64-dvd.iso
-cobbler_run_sync: false
+# xCAT (roles/xcat). /install needs about 12 GB for the DVD.
+xcat_iso_path: /srv/isos/AlmaLinux-9.8-x86_64-dvd.iso
+# STOP GATE D: keep false until the osimage and nodes have been read.
+xcat_enable_dhcp: false
+# Power and boot order through the BMCs (c01.mgmt = 192.168.2.1, ...).
+# Lets xCAT run: rpower c01 on|off|reset|stat, rsetboot c01 net, rcons c01.
+xcat_use_ipmi: true
+xcat_bmc_username: mhpc
+xcat_bmc_password: "{{ vault_bmc_password }}"

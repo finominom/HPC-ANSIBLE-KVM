@@ -22,9 +22,9 @@ compute.yml (compute play), before the lmod / slurm roles:
 
     # 1. edit hpc_compute_packages / hpc_epel_packages (group_vars or defaults/main.yml)
     # 2. stage on the master: download with all deps, createrepo, repoclosure check
-    ansible-playbook -i inventory/kvm/cobbler.ini master.yml --tags packages
+    ansible-playbook -i inventory/kvm/hosts.ini master.yml --tags packages
     # 3. update installed nodes, no reinstall
-    ansible-playbook -i inventory/kvm/cobbler.ini compute.yml --tags packages
+    ansible-playbook -i inventory/kvm/hosts.ini compute.yml --tags packages
     #    (newly provisioned nodes get it automatically: hpc-node runs compute.yml)
 
 If the master has no internet either, run the same `dnf download --resolve --alldeps`

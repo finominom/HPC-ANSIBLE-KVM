@@ -1,0 +1,26 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Prometheus Alertmanager (alert routing and e-mail)
+Documentation=https://prometheus.io/docs/alerting/latest/alertmanager/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=alertmanager
+Group=alertmanager
+# One Alertmanager only: clustering off (empty cluster.listen-address)
+ExecStart=/usr/local/bin/alertmanager \
+  --config.file=/etc/alertmanager/alertmanager.yml \
+  --storage.path=/var/lib/alertmanager \
+  --web.listen-address={{ monitoring_alertmanager_listen }} \
+  --cluster.listen-address=
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

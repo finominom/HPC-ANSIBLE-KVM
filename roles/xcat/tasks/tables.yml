@@ -1,0 +1,82 @@
+---
+# ---------- site table ----------
+- name: Configure the site table
+  ansible.builtin.include_tasks: sync_object.yml
+  vars:
+    xo_type: site
+    xo_name: clustersite
+    xo_attrs: "{{ xcat_site }}"
+
+- name: Restart xcatd so it reads the new site values
+  ansible.builtin.systemd:
+    name: xcatd
+    state: restarted
+  when: xo_last_changed | bool
+
+- name: Wait for xcatd after the restart
+  ansible.builtin.wait_for:
+    port: 3001
+    timeout: 120
+  when: xo_last_changed | bool
+
+# ---------- root password for installed nodes ----------
+# xCAT accepts a ready-made SHA-512 hash ($6$...) in passwd.password.
+- name: Read the node root password entry
+  ansible.builtin.command: tabdump passwd
+  environment: "{{ xcat_env }}"
+  register: xcat_passwd
+  changed_when: false
+  no_log: true
+
+- name: Store the node root password hash
+  ansible.builtin.command:
+    argv:
+      - chtab
+      - key=system
+      - passwd.username=root
+      - "passwd.password={{ xcat_node_root_password_hash }}"
+  environment: "{{ xcat_env }}"
+  when: ('"system","root","' ~ xcat_node_root_password_hash ~ '"') not in xcat_passwd.stdout
+  changed_when: true
+  no_log: true
+
+# ---------- networks table ----------
+# makenetworks (run by xcatconfig) added one entry per NIC: the libvirt NAT
+# or campus network, the management network and the cluster network. Keep
+# only the cluster network, under a fixed name, so DHCP can never be
+# configured anywhere else.
+- name: List the network objects
+  ansible.builtin.command: lsdef -t network -s
+  environment: "{{ xcat_env }}"
+  register: xcat_networks
+  changed_when: false
+  failed_when: false
+
+- name: Remove every network object except {{ xcat_network_name }}
+  ansible.builtin.command:
+    argv: [rmdef, -t, network, -o, "{{ item }}"]
+  environment: "{{ xcat_env }}"
+  loop: >-
+    {{ xcat_networks.stdout_lines
+       | select('search', '\(network\)')
+       | map('regex_replace', '\s.*$', '')
+       | reject('equalto', xcat_network_name)
+       | list }}
+  changed_when: true
+
+- name: Define the cluster network
+  ansible.builtin.include_tasks: sync_object.yml
+  vars:
+    xo_type: network
+    xo_name: "{{ xcat_network_name }}"
+    xo_attrs:
+      net: "{{ cluster_net.split('/')[0] }}"
+      mask: "{{ cluster_netmask }}"
+      mgtifname: "{{ xcat_dhcp_interface }}"
+      gateway: "{{ xcat_node_gateway }}"
+      dhcpserver: "{{ master_cluster_ip }}"
+      tftpserver: "{{ master_cluster_ip }}"
+      nameservers: "{{ master_cluster_ip }}"
+      ntpservers: "{{ master_cluster_ip }}"
+      domain: "{{ cluster_domain }}"
+      dynamicrange: "{{ xcat_dynamic_range }}"

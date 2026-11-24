@@ -1,0 +1,116 @@
+---
+# STOP GATE D. Nothing here runs until xcat_enable_dhcp is true
+# (-e xcat_enable_dhcp=true). Then:
+#   - dhcpd is pinned to the cluster NIC with a systemd drop-in. xCAT writes
+#     DHCPD_INTERFACE to /etc/sysconfig/dhcpd, which the EL9 dhcpd unit does
+#     not read, so without the drop-in dhcpd would answer on every NIC that
+#     has a subnet in dhcpd.conf.
+#   - makedhcp -n writes /etc/dhcp/dhcpd.conf (subnets for site.dhcpinterfaces)
+#   - makedhcp adds a fixed address for each defined node
+- name: Remind about the stop gate
+  ansible.builtin.debug:
+    msg: >-
+      DHCP NOT enabled (xcat_enable_dhcp is false). Read first:
+      lsdef -t osimage -o {{ xcat_osimage }};
+      lsdef {{ xcat_nodes | map('extract', hostvars, 'inventory_hostname_short') | join(',') | default('NODE', true) }};
+      less {{ xcat_template_file }} {{ xcat_installdir }}/postscripts/{{ xcat_bootstrap_script }}.
+      Then re-run with -e xcat_enable_dhcp=true --tags xcat.
+  when: not (xcat_enable_dhcp | bool)
+
+- name: Turn on DHCP for the cluster network
+  when: xcat_enable_dhcp | bool
+  block:
+    - name: Create the dhcpd drop-in folder
+      ansible.builtin.file:
+        path: /etc/systemd/system/dhcpd.service.d
+        state: directory
+        mode: "0755"
+
+    - name: Pin dhcpd to {{ xcat_dhcp_interface }}
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/dhcpd.service.d/hpc-interface.conf
+        content: |
+          # Managed by Ansible (roles/xcat). Serve DHCP on the cluster NIC only.
+          [Service]
+          ExecStart=
+          ExecStart=/usr/sbin/dhcpd -f -cf /etc/dhcp/dhcpd.conf -user dhcpd -group dhcpd --no-pid {{ xcat_dhcp_interface }}
+        owner: root
+        group: root
+        mode: "0644"
+      register: xcat_dhcpd_dropin
+      notify: Reload systemd
+
+    # makedhcp -n restarts dhcpd itself, so systemd must know the drop-in first
+    - name: Apply the drop-in before makedhcp runs
+      ansible.builtin.meta: flush_handlers
+
+    - name: Check whether dhcpd.conf already has the cluster subnet
+      ansible.builtin.command: grep -Eq '^\s*subnet {{ cluster_net.split("/")[0] | regex_escape }} netmask' /etc/dhcp/dhcpd.conf
+      register: xcat_dhcpconf
+      changed_when: false
+      failed_when: false
+
+    - name: Write dhcpd.conf (makedhcp -n)
+      ansible.builtin.command: makedhcp -n
+      environment: "{{ xcat_env }}"
+      when: xcat_dhcpconf.rc != 0 or (xcat_dhcp_dirty | default(false) | bool)
+      changed_when: true
+      register: xcat_makedhcp_n
+
+    # ---------- the check Cobbler's Gate D did by hand ----------
+    - name: List the subnets in dhcpd.conf
+      ansible.builtin.command: grep -E '^\s*subnet ' /etc/dhcp/dhcpd.conf
+      register: xcat_subnets
+      changed_when: false
+      failed_when: false
+
+    - name: Stop unless the only subnet is the cluster network
+      ansible.builtin.assert:
+        that:
+          - xcat_subnets.stdout_lines | length == 1
+          - xcat_subnets.stdout is search('subnet ' ~ cluster_net.split('/')[0] ~ ' netmask ' ~ cluster_netmask)
+        fail_msg: >-
+          dhcpd.conf has {{ xcat_subnets.stdout_lines | map('trim') | list }}. Only
+          {{ cluster_net }} is allowed. Check site.dhcpinterfaces and lsdef -t network.
+        quiet: true
+
+    - name: Start dhcpd (restart when the drop-in or the config changed)
+      ansible.builtin.systemd:
+        name: dhcpd
+        daemon_reload: true
+        state: "{{ 'restarted' if (xcat_dhcpd_dropin is changed or xcat_makedhcp_n is changed) else 'started' }}"
+        enabled: true
+
+    - name: Check dhcpd listens only on {{ xcat_dhcp_interface }}
+      ansible.builtin.command: ps -C dhcpd -o args=
+      register: xcat_dhcpd_args
+      changed_when: false
+      failed_when: not (xcat_dhcpd_args.stdout | trim is search(xcat_dhcp_interface ~ '$'))
+
+    - name: Query the fixed addresses dhcpd has for the nodes
+      ansible.builtin.command:
+        argv: [makedhcp, -q, "{{ xcat_nodes | map('extract', hostvars, 'inventory_hostname_short') | join(',') }}"]
+      environment: "{{ xcat_env }}"
+      register: xcat_dhcp_query
+      changed_when: false
+      failed_when: false
+      when: xcat_nodes | length > 0
+
+    - name: Add the nodes to DHCP
+      ansible.builtin.command:
+        argv: [makedhcp, "{{ xcat_nodes | map('extract', hostvars, 'inventory_hostname_short') | join(',') }}"]
+      environment: "{{ xcat_env }}"
+      when:
+        - xcat_nodes | length > 0
+        - (xcat_makedhcp_n is changed)
+          or (xcat_dhcp_dirty | default(false) | bool)
+          or (xcat_nodes | map('extract', hostvars, 'xcat_mac')
+              | reject('in', xcat_dhcp_query.stdout | default('') | lower) | list | length > 0)
+      changed_when: true
+
+    - name: Show the next step
+      ansible.builtin.debug:
+        msg: >-
+          DHCP is on for {{ cluster_net }} ({{ xcat_dhcp_interface }} only). To install a node:
+          nodeset NODE osimage={{ xcat_osimage }}; read /install/autoinst/NODE;
+          then power it on (virsh start NODE on the KVM host{{ ', or rpower NODE boot' if xcat_use_ipmi | bool else '' }}).

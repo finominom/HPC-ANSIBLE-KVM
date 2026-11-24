@@ -1,42 +1,61 @@
 ---
-# cobbler_provisioning settings for the KVM rehearsal.
-# Everything is taken from the variables this inventory already has (all.yml,
-# group_vars/compute.yml, host_vars/cNN.hpc.yml), so there is one place to change a value.
+# Compute-node provisioning for the KVM rehearsal: the xcat role (install
+# server) and the hpc_provisioning role (hpc-node controller).
+# Values come from this inventory's other files (all.yml, compute.yml,
+# host_vars/cNN.hpc.yml), so there is one place to change each of them.
 # For the real cluster, copy this file to inventory/supermicro/group_vars/master/.
 
-# Media: reuse the distro already in Cobbler -> distro and profile AlmaLinux-9-minimal-x86_64
-hpc_media_name: AlmaLinux-9-minimal
-hpc_profile: "{{ hpc_media_name }}-x86_64"
-# Only needed when the distro does not exist yet (fresh master): the official minimal ISO
-# copied to /data/isos. If you use another ISO, put its `sha256sum` here.
-hpc_media_version: "9.8"
-hpc_iso_dir: /data/isos
-hpc_iso_file: AlmaLinux-9-latest-x86_64-minimal.iso
-hpc_iso_sha256: "7762a4b45a66235726db145a573658964bf77bf7b9bc1c018afe86a4cf37cc2e"
+# ---------- Install media ----------
+# The official Minimal ISO, copied to /data/isos (same file Cobbler used)
+xcat_iso_path: /data/isos/AlmaLinux-9-latest-x86_64-minimal.iso
+xcat_iso_sha256: "7762a4b45a66235726db145a573658964bf77bf7b9bc1c018afe86a4cf37cc2e"
 
-# Network: from all.yml
-hpc_master_ip: "{{ master_cluster_ip }}"
-hpc_pxe_subnet: "{{ cluster_net.split('/')[0] }}"
-hpc_pxe_netmask: "{{ cluster_netmask }}"
-hpc_node_domain: "{{ cluster_domain }}"
-hpc_timezone: "{{ cluster_timezone }}"
+# The Minimal ISO carries only a subset of BaseOS/AppStream. The installer
+# also uses the master's full mirrors (/data/repos, served at /repos), so
+# every package below is found and nodes start on the newest builds.
+xcat_install_repos:
+  - { name: Minimal, url: "http://{{ master_cluster_ip }}/install/{{ xcat_osver }}/{{ xcat_arch }}/Minimal" }
+  - { name: hpc-baseos, url: "http://{{ master_cluster_ip }}/repos/baseos" }
+  - { name: hpc-appstream, url: "http://{{ master_cluster_ip }}/repos/appstream" }
+xcat_pkg_search_dirs:
+  - "/install/{{ xcat_osver }}/{{ xcat_arch }}"
+  - /data/repos/baseos
+  - /data/repos/appstream
 
-# Node NIC: from group_vars/compute.yml (node_if_cluster). Used in the kickstart
-# and as the Cobbler interface name. All compute nodes must share it.
-hpc_boot_nic: "{{ hostvars[groups['compute'][0]].node_if_cluster }}"
-hpc_cobbler_iface: "{{ hpc_boot_nic }}"
+# Package set: @core installed cleanly from the Minimal ISO with Cobbler;
+# perl, wget, rsync and tar are needed by xCAT's install scripts.
+xcat_node_packages:
+  - "@core"
+  - chrony
+  - curl
+  - python3
+  - tar
+  - perl-interpreter
+  - wget
+  - rsync
+  - bzip2
+  - openssh-server
+  - NetworkManager
+  - nfs-utils
+  - util-linux
 
-# Node root password: the hash already in vault.yml
-hpc_root_password_hash: "{{ vault_node_root_password_hash }}"
+# Disk layout that fits the lab node disks: /boot 1 GiB, swap, / fixed, /scratch = rest
+xcat_root_mb: 12288
+xcat_swap_mb: 2048
 
-# Disk layout that fits the 20 GB node disks (node_vm_disk_gb); /scratch takes the rest
-hpc_root_mb: 12288
-hpc_swap_mb: 2048
+# ---------- Stop gate D and power ----------
+# Keep false until the osimage and the node definitions have been read.
+# Open it once with: master.yml --tags xcat -e xcat_enable_dhcp=true
+xcat_enable_dhcp: false
+# xCAT's own IPMI cannot reach VirtualBMC (one IP, many ports); hpc-node
+# powers the VMs through the ipmi function below instead.
+xcat_use_ipmi: false
 
-# Power control. KVM lab: VirtualBMC on the KVM host (lab/lab-node.sh), c01 -> port 6231.
-# Put the VBMC password in vault.yml as vault_ipmi_password. Without VirtualBMC, run
-# "hpc-node provision c02 --no-power" and start the VM yourself.
-hpc_ipmi_set_bootdev: false
+# ---------- hpc-node (roles/hpc_provisioning) ----------
+# VirtualBMC on the KVM host (lab/lab-node.sh): c01 -> 192.168.0.254:6231.
+# VBMC password in vault.yml as vault_ipmi_password.
+# Without VirtualBMC, run "hpc-node provision c02 --no-power" and start the VM yourself.
+hpc_ipmi_set_bootdev: false     # VMs are PXE-first; xCAT answers install or boot-from-disk
 hpc_ipmi_password: "{{ vault_ipmi_password | default('') }}"
 hpc_ipmi_function: |
   ipmi() { local node=$1; shift; local n=$((10#${node#c})); ipmitool -I lanplus -H 192.168.0.254 -p $((6230+n)) -U mhpc -f /root/.ipmi-mhpc "$@"; }
@@ -45,4 +64,4 @@ hpc_ipmi_function: |
 hpc_validate_packages: [openmpi, openmpi-devel, cmake, Lmod]
 hpc_validate_users: []          # add accounts the service_accounts role creates
 hpc_validate_hosts: ["master.{{ cluster_domain }}"]
-hpc_validate_time_sync: true    # NAT mode: the master has a time source
+hpc_validate_time_sync: true    # the master has a time source through NAT

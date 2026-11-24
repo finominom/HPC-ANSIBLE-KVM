@@ -1,6 +1,0 @@
-[Unit]
-Description=Dispatch Cobbler install events for HPC compute nodes
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/hpc-provision-dispatch

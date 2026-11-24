@@ -4,3 +4,13 @@
 # Use NEW secrets here - never reuse the VirtualBox ones.
 vault_slurm_db_pass: "CHANGE-ME"
 vault_node_root_password_hash: "$6$CHANGE-ME"
+
+# Password of the BMC user mhpc (xCAT power control over IPMI)
+vault_bmc_password: "CHANGE-ME"
+
+# Grafana web login "admin" (12+ characters):  openssl rand -base64 18
+vault_grafana_admin_password: "CHANGE-ME"
+
+# Optional: password for e-mailing alerts (for Gmail/Google Workspace an
+# App Password). Leave as is if monitoring_alert_email_to is empty.
+vault_alert_smtp_password: ""

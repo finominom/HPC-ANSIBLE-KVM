@@ -1,0 +1,34 @@
+---
+# xCAT on the master. Order matters: each file assumes the previous ones ran.
+# Preflight carries every xcat_* tag: later steps need the node list it builds.
+- name: Preflight checks (names, keys, MACs)
+  ansible.builtin.import_tasks: preflight.yml
+  tags: [xcat, xcat_preflight, xcat_install, xcat_restore, xcat_tables, xcat_media, xcat_osimage, xcat_nodes, xcat_dhcp]
+
+- name: Install xCAT from the xcat-core and xcat-dep repositories
+  ansible.builtin.import_tasks: install.yml
+  tags: [xcat, xcat_install]
+
+- name: Put back what xcatconfig changed (firewalld, SELinux, /etc/exports)
+  ansible.builtin.import_tasks: restore.yml
+  tags: [xcat, xcat_restore]
+
+- name: Site, password and network tables
+  ansible.builtin.import_tasks: tables.yml
+  tags: [xcat, xcat_tables]
+
+- name: Copy the AlmaLinux media into /install (copycds)
+  ansible.builtin.import_tasks: media.yml
+  tags: [xcat, xcat_media]
+
+- name: HPC osimage (Kickstart template, package list, first-boot script)
+  ansible.builtin.import_tasks: osimage.yml
+  tags: [xcat, xcat_osimage]
+
+- name: Compute node definitions and SSH host keys
+  ansible.builtin.import_tasks: nodes.yml
+  tags: [xcat, xcat_nodes]
+
+- name: STOP GATE D - DHCP on the cluster network
+  ansible.builtin.import_tasks: dhcp.yml
+  tags: [xcat, xcat_dhcp]

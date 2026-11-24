@@ -12,6 +12,8 @@ bind_forwarders: [10.0.2.3]
 nfs_require_separate_data_fs: false
 slurm_innodb_buffer_pool_size: 256M
 
-cobbler_iso_path: /srv/isos/AlmaLinux-9.8-x86_64-dvd.iso
-# Keep false until STOP GATE D in the runbook has passed.
-cobbler_run_sync: false
+# xCAT (roles/xcat)
+xcat_iso_path: /srv/isos/AlmaLinux-9.8-x86_64-dvd.iso
+# STOP GATE D: keep false until the osimage and nodes have been read.
+xcat_enable_dhcp: false
+xcat_use_ipmi: false

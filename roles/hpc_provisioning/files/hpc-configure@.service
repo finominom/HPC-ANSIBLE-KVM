@@ -1,0 +1,9 @@
+[Unit]
+Description=Install, configure and validate HPC compute node %i
+After=network-online.target xcatd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/hpc-node-configure %i
+TimeoutStartSec=4h
+Environment=HOME=/root ANSIBLE_FORCE_COLOR=0

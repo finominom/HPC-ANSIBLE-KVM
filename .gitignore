@@ -2,3 +2,6 @@ provisioning/logs/
 provisioning/state/
 *.bak*
 *.retry
+.vault_pass*
+# Never commit an unencrypted secret: munge.key and vault.yml must be
+# ansible-vault encrypted before `git add`.

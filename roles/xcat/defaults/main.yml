@@ -1,0 +1,171 @@
+---
+# xCAT management node on the master: replaces the old cobbler role.
+# Runbook section 12 (provisioning). Read roles/xcat/README.md first.
+
+# ---------------------------------------------------------------------------
+# Software
+# ---------------------------------------------------------------------------
+# xCAT 2.18 publishes signed EL8/EL9/EL10 repositories. xcat-dep holds the
+# boot loaders (xnba, syslinux-xcat, grub2-xcat), genesis and goconserver.
+xcat_version: "2.18"
+xcat_core_baseurl: "https://xcat.org/files/xcat/repos/yum/{{ xcat_version }}/xcat-core"
+xcat_dep_baseurl: "https://xcat.org/files/xcat/repos/yum/latest/xcat-dep/rh{{ ansible_facts.distribution_major_version }}/{{ ansible_facts.architecture }}"
+xcat_repo_gpgcheck: true
+
+xcat_root: /opt/xcat
+xcat_installdir: /install
+xcat_tftpdir: /tftpboot
+
+# Every xCAT command needs these (Ansible does not read /etc/profile.d).
+xcat_env:
+  XCATROOT: "{{ xcat_root }}"
+  HOME: /root
+  PATH: "{{ xcat_root }}/bin:{{ xcat_root }}/sbin:{{ xcat_root }}/share/xcat/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# ---------------------------------------------------------------------------
+# What xcatconfig changes during `dnf install xCAT`, and what this role puts back
+# ---------------------------------------------------------------------------
+# xcatconfig stops and disables firewalld. The role starts it again (the
+# zones and the NAT policy from the base role are permanent, so they come back).
+xcat_keep_firewalld: true
+# xcatconfig writes SELINUX=disabled. xCAT does not support enforcing mode on
+# the management node, so the role uses permissive: labels stay correct and
+# denials are logged, and the other roles' semanage/restorecon steps still run.
+xcat_mn_selinux_state: permissive
+# xcatconfig adds "/install *(rw,no_root_squash)" and "/tftpboot ..." to
+# /etc/exports (world-writable NFS). Diskful installs use HTTP, so the role
+# removes those two lines. The nfs role owns /etc/exports.
+xcat_remove_world_exports: true
+
+# ---------------------------------------------------------------------------
+# OS media (copycds)
+# ---------------------------------------------------------------------------
+# xcat_osver and xcat_arch come from group_vars/all.yml (the base role uses
+# them for the node repo file as well).
+xcat_iso_path: /data/isos/AlmaLinux-9-latest-x86_64-dvd.iso
+# SHA-256 of that ISO (from the mirror's CHECKSUM file). Empty = not checked.
+xcat_iso_sha256: ""
+xcat_iso_mount: /mnt/xcat-iso
+# Space needed under /install, on top of the ISO size (bytes)
+xcat_install_headroom_bytes: 2147483648
+# Extra repositories the installer uses next to the media, written as
+# "repo" lines in the Kickstart. With the Minimal ISO, point these at full
+# mirrors (e.g. the master's /repos/baseos and /repos/appstream) so the
+# install finds every package. List of {name, url}.
+xcat_install_repos: []
+# Where the role looks for the packages below: the copied media plus the
+# local folders behind xcat_install_repos.
+xcat_pkg_search_dirs:
+  - "{{ xcat_installdir }}/{{ xcat_osver }}/{{ xcat_arch }}"
+# Packages the node install needs. The Minimal ISO alone lacks some of them;
+# the role stops after copycds if one is missing from every search folder.
+xcat_required_media_pkgs:
+  - chrony
+  - nfs-utils
+  - python3
+  - perl-interpreter
+  - curl
+  - rsync
+  - tar
+  - wget
+  - openssh-server
+  - NetworkManager
+
+# ---------------------------------------------------------------------------
+# osimage (Kickstart template, package list, postbootscript)
+# ---------------------------------------------------------------------------
+xcat_stock_osimage: "{{ xcat_osver }}-{{ xcat_arch }}-install-compute"
+xcat_osimage: "hpc-{{ xcat_osver }}-{{ xcat_arch }}-install-compute"
+xcat_custom_dir: "{{ xcat_installdir }}/custom/install/hpc"
+xcat_template_file: "{{ xcat_custom_dir }}/hpc-compute.tmpl"
+xcat_pkglist_file: "{{ xcat_custom_dir }}/hpc-compute.pkglist"
+# SELinux on the compute nodes (the Cobbler Kickstart used enforcing).
+# With enforcing, the node relabels itself on first boot (one extra reboot),
+# because files written by xCAT's install-time scripts are not labelled.
+xcat_node_selinux: enforcing
+xcat_node_packages:
+  - "@^minimal-environment"
+  - chrony
+  - python3
+  - nfs-utils
+  - openssh-server
+  - rsync
+  - tar
+  - bzip2
+  - wget
+  - net-tools
+  - util-linux
+  - perl-interpreter    # xCAT's post-install script calls perl
+
+# Our first-boot script (static NIC, chrony, master's SSH key, FQDN)
+xcat_bootstrap_script: hpc_bootstrap
+
+# Disk layout. xcat_root_mb > 0: our layout on one disk: /boot 1 GiB, swap,
+# / fixed, /scratch = the rest. 0: xCAT's default layout (LVM, whole disk).
+xcat_root_mb: 0
+xcat_swap_mb: 2048
+# Install disk (e.g. sda, vda). Empty = first non-removable, non-USB disk.
+xcat_install_disk: ""
+
+# The node fetches its provisioning job ID from here during the install
+# (hpc-node writes it; see roles/hpc_provisioning).
+xcat_job_url_path: /install/hpc-provision/jobs
+
+# ---------------------------------------------------------------------------
+# Site and network tables
+# ---------------------------------------------------------------------------
+xcat_dhcp_interface: "{{ master_if_cluster }}"
+# Name of the one network object the role keeps (all others are removed so
+# xCAT never writes a DHCP subnet for the external or management network).
+xcat_network_name: hpcnet
+# Addresses for unknown machines (node discovery). Empty = none: only nodes
+# with a MAC in the inventory get an address.
+xcat_dynamic_range: ""
+# Gateway handed to the nodes: the master in nat mode, none in local mode.
+xcat_node_gateway: "{{ master_cluster_ip if cluster_pkg_source == 'nat' else '' }}"
+
+# Root SSH between compute nodes. NOGROUPS = the master's root private key is
+# NOT copied to the nodes (only its public key). Set "compute" to allow
+# root ssh node-to-node.
+xcat_sshbetweennodes: NOGROUPS
+
+xcat_site:
+  master: "{{ master_cluster_ip }}"
+  domain: "{{ cluster_domain }}"
+  nameservers: "{{ master_cluster_ip }}"
+  dhcpinterfaces: "{{ xcat_dhcp_interface }}"
+  timezone: "{{ cluster_timezone }}"
+  sshbetweennodes: "{{ xcat_sshbetweennodes }}"
+  xcatdebugmode: "0"
+# BIND is managed by the bind role: never run makedns or makehosts here.
+
+xcat_node_root_password_hash: "{{ vault_node_root_password_hash }}"
+
+# ---------------------------------------------------------------------------
+# Nodes
+# ---------------------------------------------------------------------------
+xcat_node_groups: "compute,all"
+# Serial console (virsh console NODE on the KVM host; SOL on real hardware)
+xcat_serialport: "0"
+xcat_serialspeed: "115200"
+# BMC (IPMI) power control. Off for KVM VMs; on for the Supermicro nodes.
+xcat_use_ipmi: false
+xcat_bmc_username: ""
+xcat_bmc_password: ""
+
+# ---------------------------------------------------------------------------
+# STOP GATE D
+# ---------------------------------------------------------------------------
+# Leave false until the osimage and the node definitions have been read.
+# true = write dhcpd.conf, start DHCP on the cluster NIC only, add the nodes.
+xcat_enable_dhcp: false
+
+# Firewall (internal zone only)
+xcat_firewall_services: [dhcp, tftp, http]
+xcat_firewall_ports:
+  - 3001/tcp     # xcatd
+  - 3001/udp
+  - 3002/tcp     # install status from the nodes
+  - 3002/udp
+  - 514/tcp      # node syslog to the master (xCAT syslog postscript)
+  - 514/udp

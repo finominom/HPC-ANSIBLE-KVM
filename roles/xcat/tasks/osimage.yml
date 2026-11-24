@@ -1,0 +1,60 @@
+---
+- name: Create the custom osimage folder
+  ansible.builtin.file:
+    path: "{{ xcat_custom_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Read the master's root public key
+  ansible.builtin.slurp:
+    src: /root/.ssh/id_ed25519.pub
+  register: xcat_pubkey_raw
+
+- name: Remember the key for the Kickstart and the first-boot script
+  ansible.builtin.set_fact:
+    xcat_master_pubkey: "{{ xcat_pubkey_raw.content | b64decode | trim }}"
+
+- name: Folder the nodes read their provisioning job ID from (over HTTP)
+  ansible.builtin.file:
+    path: "{{ xcat_installdir }}/hpc-provision/jobs"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Deploy the HPC Kickstart template
+  ansible.builtin.template:
+    src: hpc-compute.tmpl.j2
+    dest: "{{ xcat_template_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Deploy the HPC package list
+  ansible.builtin.template:
+    src: hpc-compute.pkglist.j2
+    dest: "{{ xcat_pkglist_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+# Runs once on each node at first boot, after xCAT's own scripts.
+- name: Deploy the first-boot script
+  ansible.builtin.template:
+    src: hpc_bootstrap.j2
+    dest: "{{ xcat_installdir }}/postscripts/{{ xcat_bootstrap_script }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Define the HPC osimage (a copy of the stock one with our files)
+  ansible.builtin.include_tasks: sync_object.yml
+  vars:
+    xo_type: osimage
+    xo_name: "{{ xcat_osimage }}"
+    xo_mkdef_extra: ["--template", "{{ xcat_stock_osimage }}"]
+    xo_attrs:
+      template: "{{ xcat_template_file }}"
+      pkglist: "{{ xcat_pkglist_file }}"

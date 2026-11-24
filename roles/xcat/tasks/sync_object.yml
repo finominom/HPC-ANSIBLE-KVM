@@ -1,0 +1,67 @@
+---
+# Create or update one xCAT object, changing only the attributes that differ.
+# Variables set by the caller:
+#   xo_type         object type: site, network, osimage, node
+#   xo_name         object name
+#   xo_attrs        dict attribute -> value ('' clears an attribute)
+#   xo_mkdef_extra  optional list of extra mkdef arguments (e.g. --template X)
+#   xo_secret       optional bool: hide values in the output (passwords)
+# Sets: xo_last_changed (bool), and xcat_dhcp_dirty=true when anything changed.
+- name: "Start with an empty change list for {{ xo_name }}"
+  ansible.builtin.set_fact:
+    xo_changes: []
+    xo_last_changed: false
+
+- name: "Read the xCAT object {{ xo_type ~ '/' ~ xo_name }}"
+  ansible.builtin.command:
+    argv: ["lsdef", "-t", "{{ xo_type }}", "-o", "{{ xo_name }}", "-c", "-i", "{{ xo_attrs.keys() | join(',') }}"]
+  environment: "{{ xcat_env }}"
+  register: xo_lsdef
+  changed_when: false
+  failed_when: false
+  no_log: "{{ xo_secret | default(false) }}"
+
+# lsdef -c prints one "name: attr=value" line per attribute.
+- name: "Parse the current values of {{ xo_name }}"
+  ansible.builtin.set_fact:
+    xo_exists: "{{ xo_lsdef.rc == 0 and 'Could not find' not in (xo_lsdef.stdout ~ xo_lsdef.stderr) }}"
+    xo_current: >-
+      {{ dict(xo_lsdef.stdout_lines
+              | select('match', '^\S+: [A-Za-z0-9_.]+=')
+              | map('regex_replace', '^\S+: ', '')
+              | map('regex_findall', '^([^=]+)=(.*)$')
+              | map('first') | list) }}
+  no_log: "{{ xo_secret | default(false) }}"
+
+- name: "List the attributes that differ for {{ xo_name }}"
+  ansible.builtin.set_fact:
+    xo_changes: "{{ xo_changes + [item.key ~ '=' ~ (item.value | string)] }}"
+  loop: "{{ xo_attrs | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: (xo_current[item.key] | default('') | string) != (item.value | string)
+  no_log: "{{ xo_secret | default(false) }}"
+
+- name: "Create the xCAT object {{ xo_type ~ '/' ~ xo_name }}"
+  ansible.builtin.command:
+    argv: "{{ ['mkdef', '-t', xo_type, '-o', xo_name] + (xo_mkdef_extra | default([])) + xo_changes }}"
+  environment: "{{ xcat_env }}"
+  when: not (xo_exists | bool)
+  changed_when: true
+  no_log: "{{ xo_secret | default(false) }}"
+
+- name: "Update the xCAT object {{ xo_type ~ '/' ~ xo_name }}"
+  ansible.builtin.command:
+    argv: "{{ ['chdef', '-t', xo_type, '-o', xo_name] + xo_changes }}"
+  environment: "{{ xcat_env }}"
+  when:
+    - xo_exists | bool
+    - xo_changes | length > 0
+  changed_when: true
+  no_log: "{{ xo_secret | default(false) }}"
+
+- name: "Record a change of {{ xo_name }}"
+  ansible.builtin.set_fact:
+    xo_last_changed: true
+    xcat_dhcp_dirty: true
+  when: not (xo_exists | bool) or xo_changes | length > 0

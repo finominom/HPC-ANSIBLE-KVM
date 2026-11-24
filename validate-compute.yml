@@ -1,5 +1,5 @@
 ---
-# validate-compute.yml -- managed by Ansible role cobbler_provisioning.
+# validate-compute.yml -- managed by Ansible role hpc_provisioning.
 # A node is marked READY only if every task here passes.
 - name: Validate HPC compute nodes
   hosts: all
