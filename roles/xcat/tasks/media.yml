@@ -45,7 +45,7 @@
       when: xcat_iso_sha256 | length > 0
 
     - name: Measure the free space for {{ xcat_installdir }}
-      ansible.builtin.command: df -P -B1 --output=avail {{ xcat_installdir | dirname }}
+      ansible.builtin.command: df -B1 --output=avail {{ xcat_installdir | dirname }}
       register: xcat_df
       changed_when: false
 
