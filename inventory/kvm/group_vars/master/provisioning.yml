@@ -46,7 +46,7 @@ xcat_swap_mb: 2048
 # ---------- Stop gate D and power ----------
 # Keep false until the osimage and the node definitions have been read.
 # Open it once with: master.yml --tags xcat -e xcat_enable_dhcp=true
-xcat_enable_dhcp: false
+xcat_enable_dhcp: true
 # xCAT's own IPMI cannot reach VirtualBMC (one IP, many ports); hpc-node
 # powers the VMs through the ipmi function below instead.
 xcat_use_ipmi: false
