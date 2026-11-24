@@ -3,7 +3,7 @@
 # shellcheck source=/dev/null
 source /etc/hpc-provision.conf
 # xCAT commands (nodeset, lsdef, nodels) and XCATROOT
-[ -r /etc/profile.d/xcat.sh ] && source /etc/profile.d/xcat.sh
+[ -r /etc/profile.d/xcat.sh ] && { set +u; source /etc/profile.d/xcat.sh; set -u; }
 export PATH="/opt/xcat/bin:/opt/xcat/sbin:$PATH" XCATROOT="${XCATROOT:-/opt/xcat}" HOME="${HOME:-/root}"
 
 mkdir -p "$STATE_DIR" "$LOG_DIR" "$JOB_DIR"

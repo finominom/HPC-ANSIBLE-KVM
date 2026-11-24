@@ -6,7 +6,7 @@
   gather_facts: false
   vars:
     required_services: ["sshd", "chronyd"]
-    optional_services: ["autofs", "munge", "slurmd"]
+    optional_services: ["autofs", "munge", "slurmd", "node_exporter"]
     required_users: []
     required_packages: ["openmpi", "openmpi-devel", "cmake", "Lmod"]
     required_paths: []
